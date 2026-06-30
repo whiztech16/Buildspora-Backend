@@ -16,6 +16,8 @@ const envSchema = z.object({
   CLOUDINARY_API_KEY: z.string().min(1),
   CLOUDINARY_API_SECRET: z.string().min(1),
   ENCRYPTION_KEY: z.string().length(64, "Encryption key must be exactly 64 hex characters (32 bytes)"),
+  UPSTASH_REDIS_REST_URL: z.string().url(),
+  UPSTASH_REDIS_REST_TOKEN: z.string().min(1),
   NODE_ENV: z.enum(["development", "production"]).default("development"),
   PORT: z.string().default("3000"),
 });
