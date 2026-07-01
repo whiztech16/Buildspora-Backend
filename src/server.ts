@@ -14,7 +14,9 @@ app.use((req, res, next) => {
   const allowed = [
     "https://buildspora.vercel.app",
     "https://localhost:5173",
-    "http://localhost:3000",
+     "http://localhost:5173",
+    "https://localhost:3000",
+     "http://localhost:3000",
   ];
   const origin = req.headers.origin;
   if (origin && allowed.includes(origin)) {
