@@ -8,10 +8,8 @@ import userRoutes from "./routes/user.routes";
 
 const app = express();
 
-// middleware
-app.use(helmet());
-app.use(cors({
-  origin: (origin, callback) => {
+const corsOptions = {
+  origin: (origin: string | undefined, callback: (err: Error | null, allow?: boolean) => void) => {
     const allowed = [
       "https://buildspora.vercel.app",
       "http://localhost:5173",
@@ -20,12 +18,17 @@ app.use(cors({
     if (!origin || allowed.includes(origin)) {
       callback(null, true);
     } else {
-      callback(null, false); // reject silently, don't throw
+      callback(null, false);
     }
   },
-  methods: ["GET", "POST", "PUT", "PATCH", "DELETE"],
+  methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
   allowedHeaders: ["Content-Type", "Authorization"],
-}));
+};
+
+// middleware
+app.use(helmet());
+app.use(cors(corsOptions));
+app.options("/{*path}", cors(corsOptions));
 app.use(morgan(env.NODE_ENV === "production" ? "combined" : "dev"));
 app.use(express.json({ limit: "10mb" }));
 app.use(express.urlencoded({ extended: true }));
