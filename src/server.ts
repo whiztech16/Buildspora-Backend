@@ -4,6 +4,7 @@ import helmet from "helmet";
 import morgan from "morgan";
 import { env } from "./env";
 import authRoutes from "./routes/auth.routes";
+import userRoutes from "./routes/user.routes";
 
 const app = express();
 
@@ -20,6 +21,7 @@ app.use(express.urlencoded({ extended: true }));
 
 // routes
 app.use("/api/auth", authRoutes);
+app.use("/api/user", userRoutes);
 
 // health check
 app.get("/health", (req, res) => {
