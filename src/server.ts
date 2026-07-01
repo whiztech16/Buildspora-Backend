@@ -20,7 +20,7 @@ app.use(cors({
     if (!origin || allowed.includes(origin)) {
       callback(null, true);
     } else {
-      callback(new Error("Not allowed by CORS"));
+      callback(null, false); // reject silently, don't throw
     }
   },
   methods: ["GET", "POST", "PUT", "PATCH", "DELETE"],
