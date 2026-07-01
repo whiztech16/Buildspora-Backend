@@ -13,7 +13,7 @@ app.use(helmet());
 app.use((req, res, next) => {
   const allowed = [
     "https://buildspora.vercel.app",
-    "http://localhost:5173",
+    "https://localhost:5173",
     "http://localhost:3000",
   ];
   const origin = req.headers.origin;
