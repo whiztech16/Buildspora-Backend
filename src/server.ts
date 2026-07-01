@@ -11,7 +11,7 @@ const app = express();
 // middleware
 app.use(helmet());
 app.use(cors({
-  origin: env.NODE_ENV === "production" ? "https://yourdomain.com" : "*",
+  origin: ["http://localhost:5173", "https://buildspora.vercel.app"],
   methods: ["GET", "POST", "PUT", "PATCH", "DELETE"],
   allowedHeaders: ["Content-Type", "Authorization"],
 }));
