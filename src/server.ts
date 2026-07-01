@@ -11,7 +11,18 @@ const app = express();
 // middleware
 app.use(helmet());
 app.use(cors({
-  origin: ["http://localhost:5173", "https://buildspora.vercel.app"],
+  origin: (origin, callback) => {
+    const allowed = [
+      "https://buildspora.vercel.app",
+      "http://localhost:5173",
+      "http://localhost:3000",
+    ];
+    if (!origin || allowed.includes(origin)) {
+      callback(null, true);
+    } else {
+      callback(new Error("Not allowed by CORS"));
+    }
+  },
   methods: ["GET", "POST", "PUT", "PATCH", "DELETE"],
   allowedHeaders: ["Content-Type", "Authorization"],
 }));
