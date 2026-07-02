@@ -5,6 +5,7 @@ import { encrypt } from "../lib/encryption";
 import { logError } from "../lib/logger";
 import { eq } from "drizzle-orm";
 import { z } from "zod";
+import { uploadImage } from "../services/cloudinary.service";
 
 //schemas
 const completeProfileSchema = z.object({
@@ -77,6 +78,42 @@ export const getMe = async (req: Request, res: Response): Promise<void> => {
   }
 };
 
+// ─── Upload Avatar ────────────────────────────────────
+export const uploadAvatar = async (req: Request, res: Response): Promise<void> => {
+  try {
+    const dbUserId = (req as any).user.dbUserId;
+    const role = (req as any).user.role;
+
+    if (!req.file) {
+      res.status(400).json({ success: false, error: "No image file provided." });
+      return;
+    }
+
+    // Upload to Cloudinary under buildspora/avatars
+    const avatarUrl = await uploadImage(req.file.buffer, "buildspora/avatars");
+
+    // Save URL to correct profile table
+    if (role === "client") {
+      await db.update(clientProfiles)
+        .set({ avatarUrl, updatedAt: new Date() })
+        .where(eq(clientProfiles.userId, dbUserId));
+    } else if (role === "contractor") {
+      await db.update(contractorProfiles)
+        .set({ avatarUrl, updatedAt: new Date() })
+        .where(eq(contractorProfiles.userId, dbUserId));
+    } else if (role === "supplier") {
+      await db.update(supplierProfiles)
+        .set({ avatarUrl, updatedAt: new Date() })
+        .where(eq(supplierProfiles.userId, dbUserId));
+    }
+
+    res.status(200).json({ success: true, avatarUrl });
+  } catch (error) {
+    logError("uploadAvatar", error);
+    res.status(500).json({ success: false, error: "Image upload failed. Please try again." });
+  }
+};
+
 // ─── Complete Profile 
 export const completeProfile = async (req: Request, res: Response): Promise<void> => {
   const parsed = completeProfileSchema.safeParse(req.body);
@@ -93,7 +130,7 @@ export const completeProfile = async (req: Request, res: Response): Promise<void
     // update base user table
     if (data.fullName || data.phone) {
       await db.update(users)
-        .set({ fullName: data.fullName, phone: data.phone })
+        .set({ fullName: data.fullName, phone: data.phone, updatedAt: new Date() })
         .where(eq(users.id, dbUserId));
     }
 
@@ -111,6 +148,7 @@ export const completeProfile = async (req: Request, res: Response): Promise<void
             avatarUrl: data.avatarUrl,
             country: data.country,
             nin: encryptedNin,
+            updatedAt: new Date(),
           })
           .where(eq(clientProfiles.userId, dbUserId));
       } else {
@@ -143,6 +181,7 @@ export const completeProfile = async (req: Request, res: Response): Promise<void
             workPreference: data.workPreference,
             teamSize: data.teamSize,
             bio: data.bio,
+            updatedAt: new Date(),
           })
           .where(eq(contractorProfiles.userId, dbUserId));
       } else {
@@ -181,6 +220,7 @@ export const completeProfile = async (req: Request, res: Response): Promise<void
             supplyCategories: data.supplyCategories,
             description: data.description,
             cacNumber: data.cacNumber,
+            updatedAt: new Date(),
           })
           .where(eq(supplierProfiles.userId, dbUserId));
       } else {
@@ -236,3 +276,4 @@ export const completeProfile = async (req: Request, res: Response): Promise<void
     res.status(500).json({ success: false, error: "Something went wrong. Please try again." });
   }
 };
+

@@ -1,4 +1,4 @@
-import { pgTable, pgEnum, uuid, text, integer, numeric, boolean, timestamp, date } from "drizzle-orm/pg-core";
+import { pgTable, pgEnum, uuid, text, integer, numeric, boolean, timestamp, date,unique } from "drizzle-orm/pg-core";
 
 // ─── Enums ───────────────────────────────────────────
 export const userRoleEnum = pgEnum("user_role", ["client", "contractor", "supplier"]);
@@ -196,7 +196,9 @@ export const virtualAccounts = pgTable("virtual_accounts", {
   type: virtualAccountTypeEnum("type").notNull(),
   createdAt: timestamp("created_at").defaultNow(),
   updatedAt: timestamp("updated_at").defaultNow(),
-});
+}, (t) => ({
+  userIdUnique: unique("va_user_id_unique").on(t.userId),
+}));
 
 export const transactions = pgTable("transactions", {
   id: uuid("id").primaryKey().defaultRandom(),
