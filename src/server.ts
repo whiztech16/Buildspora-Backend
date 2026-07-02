@@ -6,6 +6,7 @@ import { env } from "./env";
 import authRoutes from "./routes/auth.routes";
 import userRoutes from "./routes/user.routes";
 import paymentsRoutes from './routes/payments.routes'
+import projectsRoutes from './routes/projects.routes'
 
 const app = express();
 
@@ -39,7 +40,7 @@ app.use(express.urlencoded({ extended: true }));
 app.use("/api/auth", authRoutes);
 app.use("/api/user", userRoutes);
 app.use("/api/payments", paymentsRoutes);
-
+app.use("/api/projects", projectsRoutes);
 // health check
 app.get("/health", (req, res) => {
   res.json({ success: true, message: "Server is running." });

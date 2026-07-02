@@ -11,7 +11,7 @@ export const transactionTypeEnum = pgEnum("transaction_type", ["inbound", "miles
 export const transactionStatusEnum = pgEnum("transaction_status", ["pending", "success", "failed", "refunded"]);
 export const quoteStatusEnum = pgEnum("quote_status", ["pending", "responded", "accepted", "declined", "paid"]);
 export const reviewSourceTypeEnum = pgEnum("review_source_type", ["milestone", "marketplace"]);
-
+export const reconciliationStatusEnum = pgEnum("reconciliation_status", ["pending", "matched", "underpaid", "overpaid"]);
 // ─── Users & Profiles ───────────────────────────────
 export const users = pgTable("users", {
   id: uuid("id").primaryKey().defaultRandom(),
@@ -89,6 +89,7 @@ export const projects = pgTable("projects", {
   status: projectStatusEnum("status").default("pending"),
   address: text("address").notNull(),
   city: text("city").notNull(),
+  state: text("state").notNull(),
   budget: numeric("budget", { precision: 15, scale: 2 }),
   description: text("description"),
   startDate: date("start_date"),
@@ -210,6 +211,8 @@ export const transactions = pgTable("transactions", {
   fee: numeric("fee", { precision: 15, scale: 2 }).default("0"),
   status: transactionStatusEnum("status").default("pending"),
   milestoneId: uuid("milestone_id").references(() => milestones.id),
+  expectedAmount: numeric("expected_amount", { precision: 15, scale: 2 }),          // ← NEW
+  reconciliationStatus: reconciliationStatusEnum("reconciliation_status"),          // ← NEW
   narration: text("narration"),
   nombaRef: text("nomba_ref"),
   merchantTxRef: text("merchant_tx_ref").unique(),
