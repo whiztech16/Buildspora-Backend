@@ -20,7 +20,7 @@ const envSchema = z.object({
   UPSTASH_REDIS_REST_TOKEN: z.string().min(1),
 
   // Nomba - Account IDs
-  NOMBA_ACCOUNT_ID: z.string().min(1),
+  NOMBA_PARENT_ACCOUNT_ID: z.string().min(1),
   NOMBA_SUB_ACCOUNT_ID: z.string().min(1),
 
   // Nomba - Test Credentials
@@ -71,6 +71,6 @@ export const nombaEnv = {
     env.NODE_ENV === "production"
       ? env.NOMBA_LIVE_PRIVATE_KEY
       : env.NOMBA_TEST_PRIVATE_KEY,
-  accountId: env.NOMBA_ACCOUNT_ID,
+  parentAccountId: env.NOMBA_PARENT_ACCOUNT_ID,
   subAccountId: env.NOMBA_SUB_ACCOUNT_ID,
 };
