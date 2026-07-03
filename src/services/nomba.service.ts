@@ -9,7 +9,8 @@ const CLIENT_ID = nombaEnv.clientId;
 const PRIVATE_KEY = nombaEnv.privateKey;
 
 async function getToken(): Promise<string> {
-  const cached = await redis.get<string>('nomba_token');
+  const cacheKey = BASE.includes('sandbox') ? 'nomba_token_sandbox' : 'nomba_token_live';
+  const cached = await redis.get<string>(cacheKey);
   if (cached) return cached;
 
   try {
@@ -22,7 +23,7 @@ async function getToken(): Promise<string> {
       },
       {
         headers: {
-          accountId: PARENT_ACCOUNT_ID, // always the PARENT id, not the sub-account id
+          accountId: PARENT_ACCOUNT_ID,
           'Content-Type': 'application/json',
         },
       }
@@ -30,14 +31,13 @@ async function getToken(): Promise<string> {
 
     const { access_token, expiresAt } = res.data.data;
     const ttlSeconds = Math.floor((new Date(expiresAt).getTime() - Date.now()) / 1000) - 60;
-    await redis.setex('nomba_token', Math.max(ttlSeconds, 60), access_token);
+    await redis.setex(cacheKey, Math.max(ttlSeconds, 60), access_token);
     return access_token;
   } catch (error: any) {
     console.error('Nomba auth failed:', error.response?.data || error.message);
     throw new Error('Failed to authenticate with Nomba');
   }
 }
-
 function headers(token: string) {
   return {
     Authorization: `Bearer ${token}`,
@@ -59,21 +59,24 @@ export async function createVirtualAccount(params: {
     throw new Error('Invalid accountName');
   }
 
+  // Nomba rejects special characters in accountName (letters, numbers, spaces only).
+  // Strips things like apostrophes, hyphens, smart quotes, etc. from real user input.
+  const cleanAccountName = accountName.trim().replace(/[^a-zA-Z0-9\s]/g, '');
+  if (cleanAccountName.length === 0) {
+    throw new Error('Invalid accountName: no valid characters after sanitization');
+  }
+
   const token = await getToken();
 
-  // NOTE: path + how subAccountId is passed (body vs path vs header) is UNCONFIRMED.
-  // This is the most likely shape based on Nomba's general REST patterns, but
-  // verify against the hackathon's exact endpoint spec before relying on it.
-  // Test this exact call in Postman first (see instructions below) before wiring
-  // it back into this function.
+  // Confirmed working shape: sub-account ID goes in the URL path, not the body.
+  // accountId header stays the PARENT account id.
   try {
     const res = await axios.post(
-      `${BASE}/accounts/virtual/sub-account`,
+      `${BASE}/accounts/virtual/${SUB_ACCOUNT_ID}`,
       {
         accountRef: accountRef.trim(),
-        accountName: accountName.trim(),
+        accountName: cleanAccountName,
         currency: 'NGN',
-        subAccountId: SUB_ACCOUNT_ID, // <-- verify: might instead need to be a header or path param
       },
       { headers: headers(token) }
     );

@@ -11,15 +11,16 @@ router.patch("/profile", authMiddleware, completeProfile);
 router.post("/avatar", authMiddleware, upload.single("avatar"), uploadAvatar);
 
 // TEMP - remove after testing
-// router.get("/test-nomba-token", async (req, res) => {
-//   try {
-//     const token = await getToken();
-//     res.json({ success: true, token });
-//   } catch (error: any) {
-//     res.status(500).json({ success: false, error: error.message });
-//   }
-// });
-
-// TEMP - remove after testing
+router.get("/test-final", async (req, res) => {
+  try {
+    const va = await createVirtualAccount({
+      accountRef: `TEST${Date.now()}`,
+      accountName: "Test Account",
+    });
+    res.json({ success: true, virtualAccount: va });
+  } catch (error: any) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
 
 export default router;

@@ -23,6 +23,10 @@ const envSchema = z.object({
   NOMBA_PARENT_ACCOUNT_ID: z.string().min(1),
   NOMBA_SUB_ACCOUNT_ID: z.string().min(1),
 
+  // Nomba - Mode (independent of NODE_ENV, so you can test live Nomba
+  // calls without flipping the whole app into production mode)
+  NOMBA_MODE: z.enum(["live", "test"]).default("test"),
+
   // Nomba - Test Credentials
   NOMBA_TEST_CLIENT_ID: z.string().min(1),
   NOMBA_TEST_PRIVATE_KEY: z.string().min(1),
@@ -57,18 +61,18 @@ if (!parsed.success) {
 
 export const env = parsed.data;
 
-// Resolved Nomba credentials based on environment
+// Resolved Nomba credentials based on NOMBA_MODE (not NODE_ENV)
 export const nombaEnv = {
   baseUrl:
-    env.NODE_ENV === "production"
+    env.NOMBA_MODE === "live"
       ? env.NOMBA_LIVE_BASE_URL ?? ""
       : env.NOMBA_TEST_BASE_URL,
   clientId:
-    env.NODE_ENV === "production"
+    env.NOMBA_MODE === "live"
       ? env.NOMBA_LIVE_CLIENT_ID
       : env.NOMBA_TEST_CLIENT_ID,
   privateKey:
-    env.NODE_ENV === "production"
+    env.NOMBA_MODE === "live"
       ? env.NOMBA_LIVE_PRIVATE_KEY
       : env.NOMBA_TEST_PRIVATE_KEY,
   parentAccountId: env.NOMBA_PARENT_ACCOUNT_ID,

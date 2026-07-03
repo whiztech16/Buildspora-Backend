@@ -7,6 +7,7 @@ import authRoutes from "./routes/auth.routes";
 import userRoutes from "./routes/user.routes";
 import paymentsRoutes from './routes/payments.routes'
 import projectsRoutes from './routes/projects.routes'
+import webhooksRoutes from './routes/webhooks.routes'
 
 const app = express();
 
@@ -33,6 +34,12 @@ app.use((req, res, next) => {
   next();
 });
 app.use(morgan(env.NODE_ENV === "production" ? "combined" : "dev"));
+
+// Webhook routes MUST be mounted before express.json() —
+// this route needs the raw request body for signature verification,
+// and express.json() below would consume/parse it first otherwise.
+app.use("/api/webhooks", webhooksRoutes);
+
 app.use(express.json({ limit: "10mb" }));
 app.use(express.urlencoded({ extended: true }));
 
