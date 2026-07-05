@@ -145,6 +145,7 @@ export const siteCheckIns = pgTable("site_check_ins", {
   checkInLat: numeric("check_in_lat", { precision: 10, scale: 7 }),
   checkInLng: numeric("check_in_lng", { precision: 10, scale: 7 }),
   checkInLocation: text("check_in_location"),
+  checkOutLocation: text("check_out_location"),
   checkOutTime: timestamp("check_out_time"),
   checkOutLat: numeric("check_out_lat", { precision: 10, scale: 7 }),
   checkOutLng: numeric("check_out_lng", { precision: 10, scale: 7 }),

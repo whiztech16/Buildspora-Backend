@@ -8,7 +8,7 @@ import userRoutes from "./routes/user.routes";
 import paymentsRoutes from './routes/payments.routes'
 import projectsRoutes from './routes/projects.routes'
 import webhooksRoutes from './routes/webhooks.routes'
-
+import milestonesRoutes from "./routes/milestones.routes";
 const app = express();
 
 // middleware
@@ -48,6 +48,7 @@ app.use("/api/auth", authRoutes);
 app.use("/api/user", userRoutes);
 app.use("/api/payments", paymentsRoutes);
 app.use("/api/projects", projectsRoutes);
+app.use("/api/milestones", milestonesRoutes);
 // health check
 app.get("/health", (req, res) => {
   res.json({ success: true, message: "Server is running." });

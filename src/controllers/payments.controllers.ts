@@ -1,8 +1,8 @@
 import { Response, Request } from "express";
 import { eq, and } from "drizzle-orm";
 import { db } from "../db";
-import { users, virtualAccounts, milestones, transactions } from "../db/schema";
-import { createVirtualAccount } from "../services/nomba.service";
+import { users, virtualAccounts, milestones, transactions, projects, savedBankAccounts, notifications } from "../db/schema";
+import { createVirtualAccount, transferToBank } from "../services/nomba.service";
 
 interface AuthRequest extends Request {
   user?: {
@@ -44,7 +44,7 @@ export const generateAccount = async (req: AuthRequest, res: Response) => {
     const accountName = `${user.fullName} - BuildSpora`;
 
     const nombaVA = await createVirtualAccount({
-      accountRef: userId,
+      accountRef: `${userId}-${Date.now()}`,
       accountName,
     });
 
@@ -160,9 +160,9 @@ export const createFundingIntent = async (req: AuthRequest, res: Response) => {
 // ─── Reconciliation Report ─────────────────────────────────
 export const getReconciliationReport = async (req: AuthRequest, res: Response) => {
   try {
-    const projectId = req.params.projectId;
+    const projectId = req.params.projectId as string;
 
-    if (!projectId || typeof projectId !== "string") {
+    if (!projectId) {
       return res.status(400).json({ success: false, error: "Invalid project id." });
     }
 
@@ -198,5 +198,138 @@ export const getReconciliationReport = async (req: AuthRequest, res: Response) =
   } catch (error: any) {
     console.error("getReconciliationReport error:", error.message);
     res.status(500).json({ success: false, error: "Failed to fetch reconciliation report." });
+  }
+};
+
+export const approveMilestone = async (req: AuthRequest, res: Response) => {
+  try {
+    const clientId = req.user!.dbUserId;
+    const milestoneId = req.params.milestoneId as string;
+
+    const milestone = await db.query.milestones.findFirst({
+      where: eq(milestones.id, milestoneId),
+    });
+
+    if (!milestone) {
+      return res.status(404).json({ success: false, error: "Milestone not found." });
+    }
+
+    const project = await db.query.projects.findFirst({
+      where: eq(projects.id, milestone.projectId),
+    });
+
+    if (!project || project.clientId !== clientId) {
+      return res.status(403).json({ success: false, error: "Access denied." });
+    }
+
+    if (!project.contractorId) {
+      return res.status(400).json({ success: false, error: "No contractor assigned." });
+    }
+
+    if (milestone.status !== "submitted") {
+      return res.status(400).json({ success: false, error: "Milestone must be submitted before approval." });
+    }
+
+    if (milestone.nombaPaymentRef) {
+      const existingTxn = await db.query.transactions.findFirst({
+        where: eq(transactions.merchantTxRef, milestone.nombaPaymentRef),
+      });
+      if (existingTxn && existingTxn.status !== "failed") {
+        return res.status(409).json({ success: false, error: "Payment already initiated for this milestone." });
+      }
+    }
+
+    const clientVA = await db.query.virtualAccounts.findFirst({
+      where: eq(virtualAccounts.userId, clientId),
+    });
+
+    if (!clientVA) {
+      return res.status(400).json({ success: false, error: "No virtual account found." });
+    }
+
+    const balance = Number(clientVA.balance);
+    const amount = Number(milestone.allocatedAmount);
+
+    if (balance < amount) {
+      const shortfall = amount - balance;
+      return res.status(402).json({
+        success: false,
+        error: "insufficient_balance",
+        balance,
+        required: amount,
+        shortfall,
+        accountNumber: clientVA.accountNumber,
+        bankName: clientVA.bankName,
+      });
+    }
+
+    const contractorBank = await db.query.savedBankAccounts.findFirst({
+      where: eq(savedBankAccounts.userId, project.contractorId),
+    });
+
+    if (!contractorBank) {
+      return res.status(400).json({ success: false, error: "Contractor has no payout bank account set up yet." });
+    }
+
+    const merchantTxRef = `MILESTONE-${milestoneId}-${Date.now()}`;
+
+    await db.update(virtualAccounts)
+      .set({ balance: String(balance - amount), updatedAt: new Date() })
+      .where(eq(virtualAccounts.id, clientVA.id));
+
+    await db.update(milestones)
+      .set({ status: "approved", approvedAt: new Date(), nombaPaymentRef: merchantTxRef })
+      .where(eq(milestones.id, milestoneId));
+
+    await db.insert(transactions).values({
+      fromAccountId: clientVA.id,
+      userId: clientId,
+      type: "milestone_payout",
+      amount: String(amount),
+      status: "pending",
+      milestoneId,
+      merchantTxRef,
+      narration: `BuildSpora: ${milestone.name} payment`,
+      recipientBank: contractorBank.bankName,
+      recipientAcct: contractorBank.accountNum,
+      recipientName: contractorBank.accountName,
+    });
+
+    try {
+      await transferToBank({
+        amount,
+        accountNumber: contractorBank.accountNum,
+        accountName: contractorBank.accountName,
+        bankCode: contractorBank.bankCode,
+        narration: `BuildSpora milestone: ${milestone.name}`,
+        merchantTxRef,
+      });
+    } catch (transferError: any) {
+      await db.update(virtualAccounts)
+        .set({ balance: String(balance), updatedAt: new Date() })
+        .where(eq(virtualAccounts.id, clientVA.id));
+
+      await db.update(milestones)
+        .set({ status: "submitted", nombaPaymentRef: null })
+        .where(eq(milestones.id, milestoneId));
+
+      await db.update(transactions)
+        .set({ status: "failed" })
+        .where(eq(transactions.merchantTxRef, merchantTxRef));
+
+      return res.status(500).json({ success: false, error: "Payment failed to initiate. Please try again." });
+    }
+
+    await db.insert(notifications).values({
+      userId: project.contractorId,
+      type: "milestone_approved",
+      title: "Milestone Approved!",
+      body: `${milestone.name} approved — ₦${amount.toLocaleString()} is on its way`,
+    });
+
+    res.json({ success: true, message: "Milestone approved. Payment is being processed.", merchantTxRef });
+  } catch (error: any) {
+    console.error("approveMilestone error:", error.message);
+    res.status(500).json({ success: false, error: "Failed to approve milestone. Please try again." });
   }
 };

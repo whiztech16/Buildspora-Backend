@@ -2,14 +2,14 @@ import axios from 'axios';
 import { redis } from '../lib/redis';
 import { nombaEnv } from '../env';
 
-const BASE = nombaEnv.baseUrl; // e.g. https://api.nomba.com/v1
-const PARENT_ACCOUNT_ID = nombaEnv.parentAccountId; // used in accountId header on every call
-const SUB_ACCOUNT_ID = nombaEnv.subAccountId;       // scopes virtual account creation to your business
+const BASE = nombaEnv.baseUrl;
+const PARENT_ACCOUNT_ID = nombaEnv.parentAccountId;
+const SUB_ACCOUNT_ID = nombaEnv.subAccountId;
 const CLIENT_ID = nombaEnv.clientId;
 const PRIVATE_KEY = nombaEnv.privateKey;
 
 async function getToken(): Promise<string> {
-  const cacheKey = BASE.includes('sandbox') ? 'nomba_token_sandbox' : 'nomba_token_live';
+  const cacheKey = 'nomba_token_live';
   const cached = await redis.get<string>(cacheKey);
   if (cached) return cached;
 
@@ -38,12 +38,31 @@ async function getToken(): Promise<string> {
     throw new Error('Failed to authenticate with Nomba');
   }
 }
+
 function headers(token: string) {
   return {
     Authorization: `Bearer ${token}`,
     'Content-Type': 'application/json',
-    accountId: PARENT_ACCOUNT_ID, // parent id again, not sub-account id
+    accountId: PARENT_ACCOUNT_ID,
   };
+}
+
+// Fetch an existing virtual account by its accountRef
+export async function getVirtualAccountByRef(accountRef: string) {
+  const token = await getToken();
+  try {
+    const res = await axios.get(
+      `${BASE}/accounts/virtual/${accountRef}`,
+      { headers: headers(token) }
+    );
+    return res.data.data;
+  } catch (error: any) {
+    if (error.response?.status === 404) {
+      return null; // genuinely doesn't exist yet
+    }
+    console.error('Nomba getVirtualAccountByRef failed:', error.response?.data || error.message);
+    throw new Error('Failed to fetch virtual account');
+  }
 }
 
 export async function createVirtualAccount(params: {
@@ -59,17 +78,20 @@ export async function createVirtualAccount(params: {
     throw new Error('Invalid accountName');
   }
 
-  // Nomba rejects special characters in accountName (letters, numbers, spaces only).
-  // Strips things like apostrophes, hyphens, smart quotes, etc. from real user input.
   const cleanAccountName = accountName.trim().replace(/[^a-zA-Z0-9\s]/g, '');
   if (cleanAccountName.length === 0) {
     throw new Error('Invalid accountName: no valid characters after sanitization');
   }
 
+  // Check if Nomba already has an account under this accountRef —
+  // avoids the "already exists" error when a previous attempt partially succeeded
+  const existing = await getVirtualAccountByRef(accountRef.trim());
+  if (existing) {
+    return existing;
+  }
+
   const token = await getToken();
 
-  // Confirmed working shape: sub-account ID goes in the URL path, not the body.
-  // accountId header stays the PARENT account id.
   try {
     const res = await axios.post(
       `${BASE}/accounts/virtual/${SUB_ACCOUNT_ID}`,
@@ -87,4 +109,41 @@ export async function createVirtualAccount(params: {
   }
 }
 
-export { getToken, headers };
+const V2_BASE = BASE.replace('/v1', '/v2');
+
+export async function transferToBank(params: {
+  amount: number;
+  accountNumber: string;
+  accountName: string;
+  bankCode: string;
+  narration: string;
+  merchantTxRef: string;
+}) {
+  const { amount, accountNumber, accountName, bankCode, narration, merchantTxRef } = params;
+
+  if (!accountNumber || accountNumber.length !== 10) {
+    throw new Error('Invalid account number');
+  }
+  if (!bankCode) {
+    throw new Error('Invalid bank code');
+  }
+  if (amount <= 0) {
+    throw new Error('Invalid transfer amount');
+  }
+
+  const token = await getToken();
+
+  try {
+    const res = await axios.post(
+      `${V2_BASE}/transfers/bank`,
+      { amount, accountNumber, accountName, bankCode, merchantTxRef, narration },
+      { headers: headers(token) }
+    );
+    return res.data;
+  } catch (error: any) {
+    console.error('Nomba transferToBank failed:', error.response?.data || error.message);
+    throw new Error('Failed to initiate transfer');
+  }
+}
+
+export { getToken, headers };

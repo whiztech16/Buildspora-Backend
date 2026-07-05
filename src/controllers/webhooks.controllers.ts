@@ -1,10 +1,10 @@
 import { Request, Response } from "express";
 import { eq, and, sql } from "drizzle-orm";
 import { db } from "../db";
-import { virtualAccounts, transactions, notifications } from "../db/schema";
+
+import { virtualAccounts, transactions, notifications,milestones } from "../db/schema";
 
 export const handleNombaWebhook = async (req: Request, res: Response) => {
-  // Respond immediately — Nomba retries with exponential backoff on non-2XX
   res.status(200).json({ received: true });
 
   const payload = (req as any).nombaPayload;
@@ -19,9 +19,12 @@ export const handleNombaWebhook = async (req: Request, res: Response) => {
     switch (event_type) {
       case "payment_success": {
         const transaction = data.transaction;
+        const customer = data.customer;
         const accountRef = transaction.aliasAccountReference;
         const amount = transaction.transactionAmount;
         const transactionId = transaction.transactionId;
+
+        const senderInfo = `Received from ${customer?.senderName || "Unknown"} (${customer?.bankName || "Unknown bank"} - ${customer?.accountNumber || "N/A"})`;
 
         const va = await db.query.virtualAccounts.findFirst({
           where: eq(virtualAccounts.nombaAccountId, accountRef),
@@ -41,12 +44,10 @@ export const handleNombaWebhook = async (req: Request, res: Response) => {
           break;
         }
 
-        // Always credit balance — the money is real regardless of reconciliation outcome
         await db.update(virtualAccounts)
           .set({ balance: sql`${virtualAccounts.balance} + ${amount}`, updatedAt: new Date() })
           .where(eq(virtualAccounts.id, va.id));
 
-        // Find the oldest pending funding intent for this user
         const intent = await db.query.transactions.findFirst({
           where: and(
             eq(transactions.userId, va.userId),
@@ -76,6 +77,7 @@ export const handleNombaWebhook = async (req: Request, res: Response) => {
               reconciliationStatus,
               nombaRef: transactionId,
               merchantTxRef,
+              narration: senderInfo,
               updatedAt: new Date(),
             })
             .where(eq(transactions.id, intent.id));
@@ -88,13 +90,14 @@ export const handleNombaWebhook = async (req: Request, res: Response) => {
             status: "success",
             nombaRef: transactionId,
             merchantTxRef,
+            narration: senderInfo,
             reconciliationStatus: null,
           });
         }
 
         const amountFormatted = `₦${Number(amount).toLocaleString()}`;
         let notifTitle = "Funds Received";
-        let notifBody = `${amountFormatted} added to your account`;
+        let notifBody = `${amountFormatted} received from ${customer?.senderName || "Unknown"}`;
 
         if (reconciliationStatus === "underpaid" && intent) {
           const shortfall = Number(intent.expectedAmount) - Number(amount);
@@ -106,7 +109,7 @@ export const handleNombaWebhook = async (req: Request, res: Response) => {
           notifBody = `You sent ${amountFormatted}, which is ₦${excess.toLocaleString()} more than the milestone budget. Contact support for a refund or credit.`;
         } else if (reconciliationStatus === "matched") {
           notifTitle = "Milestone Fully Funded";
-          notifBody = `${amountFormatted} received — this milestone is now fully funded.`;
+          notifBody = `${amountFormatted} received from ${customer?.senderName || "Unknown"} — this milestone is now fully funded.`;
         }
 
         await db.insert(notifications).values({
@@ -119,13 +122,43 @@ export const handleNombaWebhook = async (req: Request, res: Response) => {
         break;
       }
 
-      case "payout_success":
-        console.log("Nomba webhook: payout_success received (transfers not yet implemented)", data);
+      case "payout_success": {
+        const merchantTxRef = data.transaction?.merchantTxRef ?? data.merchantTxRef;
+        await db.update(transactions)
+          .set({ status: "success", updatedAt: new Date() })
+          .where(eq(transactions.merchantTxRef, merchantTxRef));
         break;
+      }
 
-      case "payment_failed":
+      case "payout_failed": {
+        const merchantTxRef = data.transaction?.merchantTxRef ?? data.merchantTxRef;
+        const txn = await db.query.transactions.findFirst({
+          where: eq(transactions.merchantTxRef, merchantTxRef),
+        });
+        if (!txn) break;
+
+        await db.update(transactions)
+          .set({ status: "failed", updatedAt: new Date() })
+          .where(eq(transactions.merchantTxRef, merchantTxRef));
+
+        if (txn.fromAccountId) {
+          await db.update(virtualAccounts)
+            .set({ balance: sql`${virtualAccounts.balance} + ${txn.amount}`, updatedAt: new Date() })
+            .where(eq(virtualAccounts.id, txn.fromAccountId));
+        }
+
+        if (txn.milestoneId) {
+          await db.update(milestones)
+            .set({ status: "submitted", nombaPaymentRef: null })
+            .where(eq(milestones.id, txn.milestoneId));
+        }
+        break;
+      }
+
+      case "payment_failed": {
         console.warn("Nomba webhook: payment_failed", data);
         break;
+      }
 
       default:
         console.log("Nomba webhook: unhandled event_type", event_type);
