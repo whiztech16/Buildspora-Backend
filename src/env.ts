@@ -32,6 +32,12 @@ const envSchema = z.object({
   ENCRYPTION_KEY: z.string().length(64, "Encryption key must be exactly 64 hex characters (32 bytes)"),
 
   FRONTEND_URL: z.string().url().default("http://localhost:5173"),
+
+  EMAIL_HOST: z.string().min(1),
+  EMAIL_PORT: z.string().default("587"),
+  EMAIL_USER: z.string().email(),
+  EMAIL_PASS: z.string().min(1),
+  EMAIL_FROM: z.string().min(1),
 });
 
 const parsed = envSchema.safeParse(process.env);
@@ -50,4 +56,4 @@ export const nombaEnv = {
   privateKey: env.NOMBA_LIVE_PRIVATE_KEY,
   parentAccountId: env.NOMBA_PARENT_ACCOUNT_ID,
   subAccountId: env.NOMBA_SUB_ACCOUNT_ID,
-};
+};
