@@ -9,6 +9,9 @@ import paymentsRoutes from './routes/payments.routes'
 import projectsRoutes from './routes/projects.routes'
 import webhooksRoutes from './routes/webhooks.routes'
 import milestonesRoutes from "./routes/milestones.routes";
+import dns from 'dns';
+dns.setDefaultResultOrder('ipv4first');
+
 const app = express();
 
 // middleware
