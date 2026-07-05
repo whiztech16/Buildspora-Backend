@@ -1,5 +1,6 @@
 {
   "dependencies": {
+    "@getbrevo/brevo": "^6.0.2",
     "@neondatabase/serverless": "^1.1.0",
     "@supabase/supabase-js": "^2.108.2",
     "@upstash/ratelimit": "^2.0.8",

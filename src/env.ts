@@ -33,9 +33,9 @@ const envSchema = z.object({
 
   FRONTEND_URL: z.string().url().default("http://localhost:5173"),
 
-  // Resend (HTTP email API — replaces SMTP/nodemailer)
-  RESEND_API_KEY: z.string().min(1),
-  EMAIL_FROM: z.string().min(1), // e.g. "BuildSpora <onboarding@resend.dev>"
+  // Brevo (HTTP email API — replaces SMTP/nodemailer)
+  BREVO_API_KEY: z.string().min(1),
+  EMAIL_FROM: z.string().min(1), // e.g. "BuildSpora <fortuneokpara7@gmail.com>"
 });
 
 const parsed = envSchema.safeParse(process.env);
