@@ -33,11 +33,9 @@ const envSchema = z.object({
 
   FRONTEND_URL: z.string().url().default("http://localhost:5173"),
 
-  EMAIL_HOST: z.string().min(1),
-  EMAIL_PORT: z.string().default("587"),
-  EMAIL_USER: z.string().email(),
-  EMAIL_PASS: z.string().min(1),
-  EMAIL_FROM: z.string().min(1),
+  // Resend (HTTP email API — replaces SMTP/nodemailer)
+  RESEND_API_KEY: z.string().min(1),
+  EMAIL_FROM: z.string().min(1), // e.g. "BuildSpora <onboarding@resend.dev>"
 });
 
 const parsed = envSchema.safeParse(process.env);
@@ -56,4 +54,4 @@ export const nombaEnv = {
   privateKey: env.NOMBA_LIVE_PRIVATE_KEY,
   parentAccountId: env.NOMBA_PARENT_ACCOUNT_ID,
   subAccountId: env.NOMBA_SUB_ACCOUNT_ID,
-};
+};

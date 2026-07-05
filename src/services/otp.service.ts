@@ -1,18 +1,9 @@
 // src/services/otp.service.ts
-import nodemailer from 'nodemailer';
+import { Resend } from 'resend';
 import { redis } from '../lib/redis';
 import { env } from '../env';
 
-// Create transporter once
-const transporter = nodemailer.createTransport({
-  host: env.EMAIL_HOST,
-  port: Number(env.EMAIL_PORT),
-  secure: false, // true for port 465, false for 587
-  auth: {
-    user: env.EMAIL_USER,
-    pass: env.EMAIL_PASS,
-  },
-});
+const resend = new Resend(env.RESEND_API_KEY);
 
 function generateCode(): string {
   return Math.floor(100000 + Math.random() * 900000).toString();
@@ -29,8 +20,8 @@ export async function createAndSendOtp(
   // Store in Redis — 10 minute expiry
   await redis.setex(key, 600, code);
 
-  // Send email via Nodemailer
-  await transporter.sendMail({
+  // Send email via Resend (HTTPS API, no SMTP socket)
+  const { error } = await resend.emails.send({
     from: env.EMAIL_FROM,
     to: email,
     subject: 'Your BuildSpora verification code',
@@ -52,6 +43,11 @@ export async function createAndSendOtp(
       </div>
     `,
   });
+
+  if (error) {
+    console.error('Resend send error:', error);
+    throw new Error('Failed to send verification code.');
+  }
 }
 
 export async function verifyOtp(
