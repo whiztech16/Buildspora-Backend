@@ -1,8 +1,5 @@
-import { BrevoClient } from '@getbrevo/brevo';
 import { redis } from '../lib/redis';
 import { env } from '../env';
-
-const brevo = new BrevoClient({ apiKey: env.BREVO_API_KEY });
 
 // Parse "Name <email@domain>" format into { name, email }
 function parseFrom(from: string): { name: string; email: string } {
@@ -30,31 +27,43 @@ export async function createAndSendOtp(
 
   const sender = parseFrom(env.EMAIL_FROM);
 
-  try {
-    await brevo.transactionalEmails.sendTransacEmail({
-      sender,
-      to: [{ email }],
-      subject: 'Your BuildSpora verification code',
-      htmlContent: `
-        <div style="font-family: Arial, sans-serif; max-width: 480px; margin: 0 auto;">
-          <h2 style="color: #16A34A;">BuildSpora</h2>
-          <p>Your verification code is:</p>
-          <h1 style="font-size: 48px; letter-spacing: 12px; color: #111827; 
-                     text-align: center; background: #F9FAFB; 
-                     padding: 20px; border-radius: 8px;">
-            ${code}
-          </h1>
-          <p style="color: #6B7280;">
-            This code expires in 10 minutes.
-          </p>
-          <p style="color: #6B7280;">
-            If you did not request this, ignore this email.
-          </p>
-        </div>
-      `,
-    });
-  } catch (err) {
-    console.error('Brevo send error:', err);
+  const html = `
+    <div style="font-family: Arial, sans-serif; max-width: 480px; margin: 0 auto;">
+      <h2 style="color: #16A34A;">BuildSpora</h2>
+      <p>Your verification code is:</p>
+      <h1 style="font-size: 48px; letter-spacing: 12px; color: #111827; 
+                 text-align: center; background: #F9FAFB; 
+                 padding: 20px; border-radius: 8px;">
+        ${code}
+      </h1>
+      <p style="color: #6B7280;">
+        This code expires in 10 minutes.
+      </p>
+      <p style="color: #6B7280;">
+        If you did not request this, ignore this email.
+      </p>
+    </div>
+  `;
+
+  const params = new URLSearchParams();
+  params.append('apikey', env.ELASTICEMAIL_API_KEY);
+  params.append('from', sender.email);
+  params.append('fromName', sender.name);
+  params.append('to', email);
+  params.append('subject', 'Your BuildSpora verification code');
+  params.append('bodyHtml', html);
+  params.append('isTransactional', 'true');
+
+  const response = await fetch('https://api.elasticemail.com/v2/email/send', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    body: params.toString(),
+  });
+
+  const data = await response.json();
+
+  if (!data.success) {
+    console.error('Elastic Email send error:', data);
     throw new Error('Failed to send verification code.');
   }
 }
