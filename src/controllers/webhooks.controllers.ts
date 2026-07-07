@@ -167,6 +167,6 @@ export const handleNombaWebhook = async (req: Request, res: Response) => {
         console.log("Nomba webhook: unhandled event_type", event_type);
     }
   } catch (error: any) {
-    console.error("Nomba webhook processing error:", error.message);
+    logError("Nomba webhook processing", error);
   }
 };

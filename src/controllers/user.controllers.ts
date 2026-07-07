@@ -69,7 +69,8 @@ export const getMe = async (req: Request, res: Response): Promise<void> => {
     }
 
     // never expose supabaseId to the client
-    const { supabaseId, ...safeUser } = user;
+    const { supabaseId, transactionPinHash, ...restUser } = user;
+    const safeUser = { ...restUser, hasPin: !!transactionPinHash };
 
     res.status(200).json({ success: true, user: safeUser, profile });
   } catch (error) {

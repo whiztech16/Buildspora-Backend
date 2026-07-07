@@ -34,7 +34,7 @@ async function getToken(): Promise<string> {
     await redis.setex(cacheKey, Math.max(ttlSeconds, 60), access_token);
     return access_token;
   } catch (error: any) {
-    console.error('Nomba auth failed:', error.response?.data || error.message);
+    logError("Nomba auth", error);
     throw new Error('Failed to authenticate with Nomba');
   }
 }
@@ -60,7 +60,7 @@ export async function getVirtualAccountByRef(accountRef: string) {
     if (error.response?.status === 404) {
       return null; // genuinely doesn't exist yet
     }
-    console.error('Nomba getVirtualAccountByRef failed:', error.response?.data || error.message);
+    logError("Nomba getVirtualAccountByRef", error);
     throw new Error('Failed to fetch virtual account');
   }
 }
@@ -104,7 +104,7 @@ export async function createVirtualAccount(params: {
     );
     return res.data.data;
   } catch (error: any) {
-    console.error('Nomba createVirtualAccount failed:', error.response?.data || error.message);
+    logError("Nomba createVirtualAccount", error);
     throw new Error('Failed to create virtual account');
   }
 }
@@ -142,7 +142,7 @@ export async function resolveAccount(params: {
       || error.response?.data?.message
       || error.message
       || 'Could not resolve account. Please check the account number and bank.';
-    console.error('Nomba resolveAccount failed:', error.response?.data || error.message);
+    logError("Nomba resolveAccount", error);
     throw new Error(msg);
   }
 }
@@ -177,7 +177,7 @@ export async function transferToBank(params: {
     );
     return res.data;
   } catch (error: any) {
-    console.error('Nomba transferToBank failed:', error.response?.data || error.message);
+    logError("Nomba transferToBank", error);
     throw new Error('Failed to initiate transfer');
   }
 }

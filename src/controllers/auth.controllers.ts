@@ -232,6 +232,7 @@ export const signIn = async (req: Request, res: Response): Promise<void> => {
         email: dbUser.email,
         fullName: dbUser.fullName,
         role: dbUser.role,
+        hasPin: !!dbUser.transactionPinHash,
       },
     });
   } catch (error) {

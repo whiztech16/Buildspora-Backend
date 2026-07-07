@@ -33,7 +33,7 @@ export async function authMiddleware(req: Request, res: Response, next: NextFunc
 
     next();
   } catch (error) {
-    console.error("authMiddleware error:", error);
+    logError("authMiddleware", error);
     res.status(500).json({ success: false, error: "Authentication failed. Please try again." });
   }
 }

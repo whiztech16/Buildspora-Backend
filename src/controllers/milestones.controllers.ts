@@ -69,6 +69,8 @@ export const getMilestoneDetail = async (req: AuthRequest, res: Response) => {
 
     const checkInsWithMaps = checkIns.map((c) => ({
       ...c,
+      checkInLocationName: c.checkInLocation,   // add this alias
+  checkOutLocationName: c.checkOutLocation, // add this alias
       checkInMapsUrl: c.checkInLat && c.checkInLng ? `https://www.google.com/maps?q=${c.checkInLat},${c.checkInLng}` : null,
       checkOutMapsUrl: c.checkOutLat && c.checkOutLng ? `https://www.google.com/maps?q=${c.checkOutLat},${c.checkOutLng}` : null,
     }));
@@ -78,7 +80,7 @@ export const getMilestoneDetail = async (req: AuthRequest, res: Response) => {
       milestone: { ...milestone, images: imagesWithMaps, checkIns: checkInsWithMaps },
     });
   } catch (error: any) {
-    console.error("getMilestoneDetail error:", error.message);
+    logError("getMilestoneDetail", error);
     res.status(500).json({ success: false, error: "Failed to load milestone." });
   }
 };
@@ -161,7 +163,7 @@ export const checkIn = async (req: AuthRequest, res: Response) => {
 
     res.json({ success: true, checkIn: newCheckIn });
   } catch (error: any) {
-    console.error("checkIn error:", error.message);
+    logError("checkIn", error);
     res.status(500).json({ success: false, error: "Check-in failed. Please try again." });
   }
 };
@@ -207,7 +209,7 @@ export const checkOut = async (req: AuthRequest, res: Response) => {
 
     res.json({ success: true, checkOut: updated });
   } catch (error: any) {
-    console.error("checkOut error:", error.message);
+    logError("checkOut", error);
     res.status(500).json({ success: false, error: "Check-out failed. Please try again." });
   }
 };
@@ -259,7 +261,7 @@ export const uploadMilestonePhoto = async (req: AuthRequest, res: Response) => {
 
     res.json({ success: true, photo: { ...photo, mapsUrl } });
   } catch (error: any) {
-    console.error("uploadMilestonePhoto error:", error.message);
+    logError("uploadMilestonePhoto", error);
     res.status(500).json({ success: false, error: "Failed to upload photo. Please try again." });
   }
 };
@@ -331,7 +333,7 @@ export const submitMilestone = async (req: AuthRequest, res: Response) => {
 
     res.json({ success: true, message: "Milestone submitted successfully. Awaiting client review." });
   } catch (error: any) {
-    console.error("submitMilestone error:", error.message);
+    logError("submitMilestone", error);
     res.status(500).json({ success: false, error: "Failed to submit milestone. Please try again." });
   }
 };
@@ -391,7 +393,7 @@ export const rejectMilestone = async (req: AuthRequest, res: Response) => {
 
     res.json({ success: true, message: "Milestone rejected. Contractor has been notified.", attemptsLeft });
   } catch (error: any) {
-    console.error("rejectMilestone error:", error.message);
+    logError("rejectMilestone", error);
     res.status(500).json({ success: false, error: "Failed to reject milestone. Please try again." });
   }
 };

@@ -102,7 +102,7 @@ export const getPaymentsSummary = async (req: AuthRequest, res: Response) => {
       totalEarnings,
     });
   } catch (error: any) {
-    console.error("getPaymentsSummary error:", error.message);
+    logError("getPaymentsSummary", error);
     res.status(500).json({ success: false, error: "Failed to load payments." });
   }
 };
@@ -145,7 +145,7 @@ export const downloadReceipt = async (req: AuthRequest, res: Response) => {
       res
     );
   } catch (error: any) {
-    console.error("downloadReceipt error:", error.message);
+    logError("downloadReceipt", error);
     res.status(500).json({ success: false, error: "Failed to generate receipt." });
   }
 };
@@ -294,7 +294,7 @@ export const createFundingIntent = async (req: AuthRequest, res: Response) => {
       },
     });
   } catch (error: any) {
-    console.error("createFundingIntent error:", error.message);
+    logError("createFundingIntent", error);
     res.status(500).json({ success: false, error: "Failed to create funding intent." });
   }
 };
@@ -338,7 +338,7 @@ export const getReconciliationReport = async (req: AuthRequest, res: Response) =
 
     res.json({ success: true, report });
   } catch (error: any) {
-    console.error("getReconciliationReport error:", error.message);
+    logError("getReconciliationReport", error);
     res.status(500).json({ success: false, error: "Failed to fetch reconciliation report." });
   }
 };
@@ -350,7 +350,7 @@ export const getPinStatus = async (req: AuthRequest, res: Response) => {
     const exists = await hasTransactionPin(userId);
     res.json({ success: true, hasPin: exists });
   } catch (error: any) {
-    console.error("getPinStatus error:", error.message);
+    logError("getPinStatus", error);
     res.status(500).json({ success: false, error: "Failed to check PIN status." });
   }
 };
@@ -372,7 +372,7 @@ export const setPin = async (req: AuthRequest, res: Response) => {
 
     res.json({ success: true, message: "Transaction PIN set successfully." });
   } catch (error: any) {
-    console.error("setPin error:", error.message);
+    logError("setPin", error);
     res.status(500).json({ success: false, error: "Failed to set PIN." });
   }
 };
@@ -395,7 +395,7 @@ export const resetPin = async (req: AuthRequest, res: Response) => {
 
     res.json({ success: true, message: "PIN reset successfully." });
   } catch (error: any) {
-    console.error("resetPin error:", error.message);
+    logError("resetPin", error);
     res.status(500).json({ success: false, error: "Failed to reset PIN." });
   }
 };
@@ -525,7 +525,7 @@ export const approveMilestone = async (req: AuthRequest, res: Response) => {
 
     res.json({ success: true, message: "Milestone approved. Contractor's balance has been credited." });
   } catch (error: any) {
-    console.error("approveMilestone error:", error.message);
+    logError("approveMilestone", error);
     res.status(500).json({ success: false, error: "Failed to approve milestone. Please try again." });
   }
 };
@@ -613,7 +613,7 @@ export const withdrawFunds = async (req: AuthRequest, res: Response) => {
 
     res.json({ success: true, message: "Withdrawal initiated. Funds are on their way to your bank account." });
   } catch (error: any) {
-    console.error("withdrawFunds error:", error.message);
+    logError("withdrawFunds", error);
     res.status(500).json({ success: false, error: "Failed to process withdrawal. Please try again." });
   }
 };
@@ -709,7 +709,7 @@ export const sendMoney = async (req: AuthRequest, res: Response) => {
 
     res.json({ success: true, message: "Transfer initiated successfully.", merchantTxRef });
   } catch (error: any) {
-    console.error("sendMoney error:", error.message);
+    logError("sendMoney", error);
     res.status(500).json({ success: false, error: "Failed to send money. Please try again." });
   }
 };

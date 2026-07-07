@@ -55,7 +55,7 @@ async function sendInviteEmail(toEmail: string, projectName: string, senderName:
       console.error("sendInviteEmail Elastic Email error:", data);
     }
   } catch (error) {
-    console.error("sendInviteEmail failed:", error);
+    logError("sendInviteEmail failed", error);
     // Non-fatal — invite is already created in DB, email failure shouldn't block the response
   }
 }
@@ -156,7 +156,7 @@ export const createInvite = async (req: AuthRequest, res: Response) => {
 
     res.status(201).json({ success: true, invite });
   } catch (error: any) {
-    console.error("createInvite error:", error.message);
+    logError("createInvite", error);
     res.status(500).json({ success: false, error: "Failed to send invite. Please try again." });
   }
 };
@@ -193,7 +193,7 @@ export const getMyInvites = async (req: AuthRequest, res: Response) => {
 
     res.json({ success: true, invites: invitesWithProjects });
   } catch (error: any) {
-    console.error("getMyInvites error:", error.message);
+    logError("getMyInvites", error);
     res.status(500).json({ success: false, error: "Failed to load invites." });
   }
 };
@@ -261,7 +261,7 @@ export const acceptInvite = async (req: AuthRequest, res: Response) => {
       projectId: project.id,
     });
   } catch (error: any) {
-    console.error("acceptInvite error:", error.message);
+    logError("acceptInvite", error);
     res.status(500).json({ success: false, error: "Failed to accept invite. Please try again." });
   }
 };
@@ -296,7 +296,7 @@ export const declineInvite = async (req: AuthRequest, res: Response) => {
 
     res.json({ success: true, message: "Invite declined." });
   } catch (error: any) {
-    console.error("declineInvite error:", error.message);
+    logError("declineInvite", error);
     res.status(500).json({ success: false, error: "Failed to decline invite. Please try again." });
   }
 };

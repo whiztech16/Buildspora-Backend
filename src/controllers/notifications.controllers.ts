@@ -30,7 +30,7 @@ export const getNotifications = async (req: AuthRequest, res: Response) => {
       unreadCount,
     });
   } catch (error: any) {
-    console.error("getNotifications error:", error.message);
+    logError("getNotifications", error);
     res.status(500).json({ success: false, error: "Failed to load notifications." });
   }
 };
@@ -58,7 +58,7 @@ export const markAsRead = async (req: AuthRequest, res: Response) => {
 
     res.json({ success: true, message: "Marked as read." });
   } catch (error: any) {
-    console.error("markAsRead error:", error.message);
+    logError("markAsRead", error);
     res.status(500).json({ success: false, error: "Failed to update notification." });
   }
 };
@@ -74,7 +74,7 @@ export const markAllAsRead = async (req: AuthRequest, res: Response) => {
 
     res.json({ success: true, message: "All notifications marked as read." });
   } catch (error: any) {
-    console.error("markAllAsRead error:", error.message);
+    logError("markAllAsRead", error);
     res.status(500).json({ success: false, error: "Failed to update notifications." });
   }
 };

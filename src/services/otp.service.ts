@@ -72,7 +72,7 @@ export async function createAndSendOtp(
   const data = await response.json();
 
   if (!data.success) {
-    console.error('Elastic Email send error:', data);
+    logError("Elastic Email send", data);
     throw new Error('Failed to send verification code.');
   }
 }
