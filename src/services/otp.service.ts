@@ -1,3 +1,4 @@
+import { logError } from '../lib/logger';
 import { redis } from '../lib/redis';
 import { env } from '../env';
 

@@ -1,3 +1,4 @@
+import { logError } from '../lib/logger';
 import axios from 'axios';
 import { redis } from '../lib/redis';
 import { nombaEnv } from '../env';

@@ -1,3 +1,4 @@
+import { logError } from '../lib/logger';
 import { Response, Request } from "express";
 import { eq, and, sql } from "drizzle-orm";
 import { db } from "../db";

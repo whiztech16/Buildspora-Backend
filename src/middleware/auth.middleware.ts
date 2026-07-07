@@ -1,3 +1,4 @@
+import { logError } from '../lib/logger';
 import { Request, Response, NextFunction } from "express";
 import { verifySupabaseToken } from "../services/supabase.service";
 import { db } from "../db";
