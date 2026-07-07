@@ -19,6 +19,7 @@ export const users = pgTable("users", {
   email: text("email").notNull().unique(),
   fullName: text("full_name"),
   phone: text("phone"),
+  transactionPinHash: text("transaction_pin_hash"),
   role: userRoleEnum("role").notNull(),
   createdAt: timestamp("created_at").defaultNow(),
   updatedAt: timestamp("updated_at").defaultNow(),
@@ -101,7 +102,8 @@ export const projects = pgTable("projects", {
 export const projectInvites = pgTable("project_invites", {
   id: uuid("id").primaryKey().defaultRandom(),
   projectId: uuid("project_id").notNull().references(() => projects.id),
-  contractorId: uuid("contractor_id").notNull().references(() => users.id),
+  contractorId: uuid("contractor_id").references(() => users.id), // ← remove .notNull()
+  invitedEmail: text("invited_email"),                            // ← ADD THIS
   status: inviteStatusEnum("status").default("pending"),
   createdAt: timestamp("created_at").defaultNow(),
   updatedAt: timestamp("updated_at").defaultNow(),
@@ -286,6 +288,7 @@ export const notifications = pgTable("notifications", {
   title: text("title").notNull(),
   body: text("body").notNull(),
   read: boolean("read").default(false),
+  isRead: boolean("is_read").default(false).notNull(),
   linkTo: text("link_to"),
   createdAt: timestamp("created_at").defaultNow(),
   updatedAt: timestamp("updated_at").defaultNow(),

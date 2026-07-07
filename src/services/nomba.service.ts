@@ -111,6 +111,42 @@ export async function createVirtualAccount(params: {
 
 const V2_BASE = BASE.replace('/v1', '/v2');
 
+// ─── Resolve bank account name (name enquiry) ──────────────
+export async function resolveAccount(params: {
+  accountNumber: string;
+  bankCode: string;
+}): Promise<{ accountName: string; accountNumber: string }> {
+  const { accountNumber, bankCode } = params;
+  const token = await getToken();
+
+  try {
+    const res = await axios.post(
+      `${BASE}/transfers/bank/lookup`,   // v1 endpoint per Nomba docs
+      { accountNumber, bankCode },
+      { headers: headers(token) }
+    );
+
+    const { code, data, description } = res.data;
+
+    if (code !== '00') {
+      throw new Error(description || 'Account lookup failed — check account number and bank code');
+    }
+
+    const name = data?.accountName;
+    if (!name) throw new Error('Account name not returned by Nomba');
+
+    return { accountName: name, accountNumber: data.accountNumber || accountNumber };
+  } catch (error: any) {
+    // Re-throw clean message; axios wraps non-2xx errors
+    const msg = error.response?.data?.description
+      || error.response?.data?.message
+      || error.message
+      || 'Could not resolve account. Please check the account number and bank.';
+    console.error('Nomba resolveAccount failed:', error.response?.data || error.message);
+    throw new Error(msg);
+  }
+}
+
 export async function transferToBank(params: {
   amount: number;
   accountNumber: string;

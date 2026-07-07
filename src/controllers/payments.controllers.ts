@@ -2,9 +2,15 @@ import { Response, Request } from "express";
 import { eq, and, sql } from "drizzle-orm";
 import { db } from "../db";
 import { users, virtualAccounts, milestones, transactions, projects, savedBankAccounts, notifications } from "../db/schema";
-import { createVirtualAccount, transferToBank } from "../services/nomba.service";
-import { createAndSendOtp, verifyOtp } from "../services/otp.service";
-
+import { createVirtualAccount, transferToBank, resolveAccount } from "../services/nomba.service";
+import {
+  setTransactionPin,
+  hasTransactionPin,
+  verifyTransactionPin,
+  resetTransactionPin,
+} from "../services/pin.service";
+import { BANK_LIST, isValidBankCode, getBankByCode } from "../config/banks";
+import { generateReceiptPdf } from "../services/receipt.service";
 interface AuthRequest extends Request {
   user?: {
     dbUserId: string;
@@ -13,6 +19,138 @@ interface AuthRequest extends Request {
   };
 }
 
+// ─── Get Bank List ────────────────────────────────────────────
+export const getBanks = async (_req: Request, res: Response) => {
+  res.json({ success: true, banks: BANK_LIST });
+};
+
+// ─── Resolve Account Name ─────────────────────────────────────
+export const resolveAccountName = async (req: AuthRequest, res: Response) => {
+  try {
+    const { accountNumber, bankCode } = req.body;
+    if (!accountNumber || !/^\d{10}$/.test(accountNumber)) {
+      return res.status(400).json({ success: false, error: "Valid 10-digit account number is required." });
+    }
+    if (!bankCode) {
+      return res.status(400).json({ success: false, error: "Bank code is required." });
+    }
+    if (!isValidBankCode(bankCode)) {
+      return res.status(400).json({ success: false, error: `Unsupported bank code: ${bankCode}.` });
+    }
+    const result = await resolveAccount({ accountNumber, bankCode });
+    const bank = getBankByCode(bankCode);
+    res.json({
+      success: true,
+      accountName: result.accountName,
+      accountNumber: result.accountNumber,
+      bankName: bank?.name ?? bankCode,
+    });
+  } catch (error: any) {
+    res.status(422).json({ success: false, error: error.message || "Could not resolve account name." });
+  }
+};
+
+// ─── Get Payments Summary ─────────────────────────────────────
+export const getPaymentsSummary = async (req: AuthRequest, res: Response) => {
+  try {
+    const userId = req.user!.dbUserId;
+
+    const va = await db.query.virtualAccounts.findFirst({
+      where: eq(virtualAccounts.userId, userId),
+    });
+
+    const txns = await db.query.transactions.findMany({
+      where: eq(transactions.userId, userId),
+      orderBy: (t, { desc }) => [desc(t.createdAt)],
+    });
+
+    const totalEarnings = txns
+      .filter(t =>
+        t.status === "success" &&
+        (t.type === "milestone_payout" || t.type === "inbound" || t.type === "marketplace_payment")
+      )
+      .reduce((sum, t) => sum + Number(t.amount), 0);
+
+    const earnings = txns.map(t => ({
+      id: t.id,
+      source:
+        t.type === "milestone_payout" ? "Milestone" :
+        t.type === "marketplace_payment" ? "Marketplace" :
+        t.type === "inbound" ? "Inbound" :
+        t.type === "bank_transfer" ? "Bank Transfer" :
+        t.type === "withdrawal" ? "Withdrawal" : "Transfer",
+      projectName: t.narration || "—",
+      amount: Number(t.amount),
+      date: t.createdAt,
+      status: t.status === "success" ? "paid" : t.status,
+      type: t.type,
+      narration: t.narration,
+      recipientBank: t.recipientBank,
+      recipientAcct: t.recipientAcct,
+      recipientName: t.recipientName,
+    }));
+
+    res.json({
+      success: true,
+      virtualAccount: va ? {
+        accountNumber: va.accountNumber,
+        accountName: va.accountName,
+        bankName: va.bankName,
+        balance: Number(va.balance),
+      } : null,
+      earnings,
+      totalEarnings,
+    });
+  } catch (error: any) {
+    console.error("getPaymentsSummary error:", error.message);
+    res.status(500).json({ success: false, error: "Failed to load payments." });
+  }
+};
+
+// ─── Download Transaction Receipt ──────────────────────────────
+export const downloadReceipt = async (req: AuthRequest, res: Response) => {
+  try {
+    const userId = req.user!.dbUserId;
+    const transactionId = req.params.transactionId as string;
+
+    const txn = await db.query.transactions.findFirst({
+      where: eq(transactions.id, transactionId),
+    });
+
+    if (!txn) {
+      return res.status(404).json({ success: false, error: "Transaction not found." });
+    }
+
+    // Only the owning user can download their own receipt
+    if (txn.userId !== userId) {
+      return res.status(403).json({ success: false, error: "Access denied." });
+    }
+
+    const user = await db.query.users.findFirst({ where: eq(users.id, userId) });
+
+    generateReceiptPdf(
+      {
+        transactionId: txn.id,
+        merchantTxRef: txn.merchantTxRef ?? txn.id,
+        type: txn.type,
+        amount: Number(txn.amount),
+        status: txn.status,
+        narration: txn.narration,
+        createdAt: txn.createdAt,
+        recipientName: txn.recipientName,
+        recipientBank: txn.recipientBank,
+        recipientAcct: txn.recipientAcct,
+        senderName: user?.fullName ?? "BuildSpora User",
+      },
+      res
+    );
+  } catch (error: any) {
+    console.error("downloadReceipt error:", error.message);
+    res.status(500).json({ success: false, error: "Failed to generate receipt." });
+  }
+};
+
+// ─── Generate Virtual Account ─────────────────────────────────
 export const generateAccount = async (req: AuthRequest, res: Response) => {
   try {
     const userId = req.user!.dbUserId;
@@ -56,8 +194,11 @@ export const generateAccount = async (req: AuthRequest, res: Response) => {
       accountName: nombaVA.bankAccountName,
       bankName: nombaVA.bankName,
       balance: "0.00",
-      type: user.role === "client" ? "client_project" : user.role === "supplier" ? "supplier_payout" : "contractor_payout",
+      type: user.role === "client" ? "client_project" :
+            user.role === "supplier" ? "supplier_payout" : "contractor_payout",
     }).returning();
+
+    const pinAlreadySet = await hasTransactionPin(userId);
 
     res.json({
       success: true,
@@ -67,6 +208,7 @@ export const generateAccount = async (req: AuthRequest, res: Response) => {
         bankName: va.bankName,
         balance: va.balance,
       },
+      requiresPinSetup: !pinAlreadySet,
     });
   } catch (error: any) {
     if (error.code === "23505") {
@@ -75,13 +217,12 @@ export const generateAccount = async (req: AuthRequest, res: Response) => {
       });
       return res.json({ success: true, virtualAccount: existing, alreadyExists: true });
     }
-
     console.error("generateAccount error:", error.response?.data || error.message);
     res.status(500).json({ success: false, error: "Failed to generate account. Please try again." });
   }
 };
 
-// ─── Create Funding Intent ────────────────────────────────
+// ─── Create Funding Intent ────────────────────────────────────
 export const createFundingIntent = async (req: AuthRequest, res: Response) => {
   try {
     const dbUserId = req.user!.dbUserId;
@@ -158,7 +299,7 @@ export const createFundingIntent = async (req: AuthRequest, res: Response) => {
   }
 };
 
-// ─── Reconciliation Report ─────────────────────────────────
+// ─── Reconciliation Report ────────────────────────────────────
 export const getReconciliationReport = async (req: AuthRequest, res: Response) => {
   try {
     const projectId = req.params.projectId as string;
@@ -202,50 +343,87 @@ export const getReconciliationReport = async (req: AuthRequest, res: Response) =
   }
 };
 
-// ─── Request OTP before any payment action ──────────────────
-export const requestPaymentOtp = async (req: AuthRequest, res: Response) => {
+// ─── PIN: Status Check ─────────────────────────────────────────
+export const getPinStatus = async (req: AuthRequest, res: Response) => {
   try {
     const userId = req.user!.dbUserId;
-    const { purpose } = req.body;
-
-    if (!purpose || typeof purpose !== "string") {
-      return res.status(400).json({ success: false, error: "purpose is required." });
-    }
-
-    const user = await db.query.users.findFirst({ where: eq(users.id, userId) });
-    if (!user) {
-      return res.status(404).json({ success: false, error: "User not found." });
-    }
-
-    await createAndSendOtp(userId, user.email, purpose);
-
-    res.json({ success: true, message: "Verification code sent to your email." });
+    const exists = await hasTransactionPin(userId);
+    res.json({ success: true, hasPin: exists });
   } catch (error: any) {
-    console.error("requestPaymentOtp error:", error.message);
-    res.status(500).json({ success: false, error: "Failed to send verification code." });
+    console.error("getPinStatus error:", error.message);
+    res.status(500).json({ success: false, error: "Failed to check PIN status." });
   }
 };
 
-// ─── Approve Milestone (internal VA-to-VA transfer) ─────────
+// ─── PIN: Set (first time) ─────────────────────────────────────
+export const setPin = async (req: AuthRequest, res: Response) => {
+  try {
+    const userId = req.user!.dbUserId;
+    const { pin, confirmPin } = req.body;
+
+    if (!pin || !confirmPin) {
+      return res.status(400).json({ success: false, error: "PIN and confirmation are required." });
+    }
+
+    const result = await setTransactionPin(userId, pin, confirmPin);
+    if (!result.success) {
+      return res.status(400).json({ success: false, error: result.error });
+    }
+
+    res.json({ success: true, message: "Transaction PIN set successfully." });
+  } catch (error: any) {
+    console.error("setPin error:", error.message);
+    res.status(500).json({ success: false, error: "Failed to set PIN." });
+  }
+};
+
+// ─── PIN: Reset (forgot PIN — requires current password) ──────
+export const resetPin = async (req: AuthRequest, res: Response) => {
+  try {
+    const userId = req.user!.dbUserId;
+    const userEmail = req.user!.email;
+    const { password, newPin, confirmNewPin } = req.body;
+
+    if (!password || !newPin || !confirmNewPin) {
+      return res.status(400).json({ success: false, error: "Password, new PIN, and confirmation are required." });
+    }
+
+    const result = await resetTransactionPin(userId, userEmail, password, newPin, confirmNewPin);
+    if (!result.success) {
+      return res.status(400).json({ success: false, error: result.error });
+    }
+
+    res.json({ success: true, message: "PIN reset successfully." });
+  } catch (error: any) {
+    console.error("resetPin error:", error.message);
+    res.status(500).json({ success: false, error: "Failed to reset PIN." });
+  }
+};
+
+// ─── Approve Milestone ────────────────────────────────────────
 export const approveMilestone = async (req: AuthRequest, res: Response) => {
   try {
     const clientId = req.user!.dbUserId;
     const milestoneId = req.params.milestoneId as string;
-    const { otp } = req.body;
+    const { pin } = req.body;
 
-    if (!otp || typeof otp !== "string") {
-      return res.status(400).json({ success: false, error: "Verification code is required." });
+    if (!pin || typeof pin !== "string") {
+      return res.status(400).json({ success: false, error: "Transaction PIN is required." });
     }
 
-    const isValidOtp = await verifyOtp(clientId, "approve_milestone", otp);
-    if (!isValidOtp) {
-      return res.status(401).json({ success: false, error: "Invalid or expired verification code." });
+    const hasPinSet = await hasTransactionPin(clientId);
+    if (!hasPinSet) {
+      return res.status(403).json({ success: false, error: "PIN_REQUIRED", message: "You must set a transaction PIN before making payments." });
+    }
+
+    const pinResult = await verifyTransactionPin(clientId, pin);
+    if (!pinResult.valid) {
+      return res.status(401).json({ success: false, error: pinResult.error || "Invalid PIN." });
     }
 
     const milestone = await db.query.milestones.findFirst({
       where: eq(milestones.id, milestoneId),
     });
-
     if (!milestone) {
       return res.status(404).json({ success: false, error: "Milestone not found." });
     }
@@ -253,15 +431,12 @@ export const approveMilestone = async (req: AuthRequest, res: Response) => {
     const project = await db.query.projects.findFirst({
       where: eq(projects.id, milestone.projectId),
     });
-
     if (!project || project.clientId !== clientId) {
       return res.status(403).json({ success: false, error: "Access denied." });
     }
-
     if (!project.contractorId) {
       return res.status(400).json({ success: false, error: "No contractor assigned." });
     }
-
     if (milestone.status !== "submitted") {
       return res.status(400).json({ success: false, error: "Milestone must be submitted before approval." });
     }
@@ -278,7 +453,6 @@ export const approveMilestone = async (req: AuthRequest, res: Response) => {
     const clientVA = await db.query.virtualAccounts.findFirst({
       where: eq(virtualAccounts.userId, clientId),
     });
-
     if (!clientVA) {
       return res.status(400).json({ success: false, error: "No virtual account found." });
     }
@@ -286,7 +460,6 @@ export const approveMilestone = async (req: AuthRequest, res: Response) => {
     const contractorVA = await db.query.virtualAccounts.findFirst({
       where: eq(virtualAccounts.userId, project.contractorId),
     });
-
     if (!contractorVA) {
       return res.status(400).json({ success: false, error: "Contractor has not generated a virtual account yet." });
     }
@@ -357,19 +530,24 @@ export const approveMilestone = async (req: AuthRequest, res: Response) => {
   }
 };
 
-// ─── Withdraw Funds (VA balance -> own saved bank account) ──
+// ─── Withdraw Funds ───────────────────────────────────────────
 export const withdrawFunds = async (req: AuthRequest, res: Response) => {
   try {
     const userId = req.user!.dbUserId;
-    const { amount, otp } = req.body;
+    const { amount, pin } = req.body;
 
-    if (!otp || typeof otp !== "string") {
-      return res.status(400).json({ success: false, error: "Verification code is required." });
+    if (!pin || typeof pin !== "string") {
+      return res.status(400).json({ success: false, error: "Transaction PIN is required." });
     }
 
-    const isValidOtp = await verifyOtp(userId, "withdraw", otp);
-    if (!isValidOtp) {
-      return res.status(401).json({ success: false, error: "Invalid or expired verification code." });
+    const hasPinSet = await hasTransactionPin(userId);
+    if (!hasPinSet) {
+      return res.status(403).json({ success: false, error: "PIN_REQUIRED", message: "You must set a transaction PIN before making payments." });
+    }
+
+    const pinResult = await verifyTransactionPin(userId, pin);
+    if (!pinResult.valid) {
+      return res.status(401).json({ success: false, error: pinResult.error || "Invalid PIN." });
     }
 
     if (!amount || typeof amount !== "number" || amount <= 0) {
@@ -379,7 +557,6 @@ export const withdrawFunds = async (req: AuthRequest, res: Response) => {
     const va = await db.query.virtualAccounts.findFirst({
       where: eq(virtualAccounts.userId, userId),
     });
-
     if (!va) {
       return res.status(400).json({ success: false, error: "No virtual account found." });
     }
@@ -392,7 +569,6 @@ export const withdrawFunds = async (req: AuthRequest, res: Response) => {
     const bankAccount = await db.query.savedBankAccounts.findFirst({
       where: eq(savedBankAccounts.userId, userId),
     });
-
     if (!bankAccount) {
       return res.status(400).json({ success: false, error: "No payout bank account set up." });
     }
@@ -429,11 +605,9 @@ export const withdrawFunds = async (req: AuthRequest, res: Response) => {
       await db.update(virtualAccounts)
         .set({ balance: sql`${virtualAccounts.balance} + ${amount}`, updatedAt: new Date() })
         .where(eq(virtualAccounts.id, va.id));
-
       await db.update(transactions)
         .set({ status: "failed" })
         .where(eq(transactions.merchantTxRef, merchantTxRef));
-
       return res.status(500).json({ success: false, error: "Withdrawal failed to initiate. Please try again." });
     }
 
@@ -444,19 +618,24 @@ export const withdrawFunds = async (req: AuthRequest, res: Response) => {
   }
 };
 
-// ─── Send Money (VA balance -> any external bank account) ──
+// ─── Send Money ───────────────────────────────────────────────
 export const sendMoney = async (req: AuthRequest, res: Response) => {
   try {
     const userId = req.user!.dbUserId;
-    const { amount, accountNumber, accountName, bankCode, bankName, narration, otp } = req.body;
+    const { amount, accountNumber, accountName, bankCode, bankName, narration, pin } = req.body;
 
-    if (!otp || typeof otp !== "string") {
-      return res.status(400).json({ success: false, error: "Verification code is required." });
+    if (!pin || typeof pin !== "string") {
+      return res.status(400).json({ success: false, error: "Transaction PIN is required." });
     }
 
-    const isValidOtp = await verifyOtp(userId, "send_money", otp);
-    if (!isValidOtp) {
-      return res.status(401).json({ success: false, error: "Invalid or expired verification code." });
+    const hasPinSet = await hasTransactionPin(userId);
+    if (!hasPinSet) {
+      return res.status(403).json({ success: false, error: "PIN_REQUIRED", message: "You must set a transaction PIN before making payments." });
+    }
+
+    const pinResult = await verifyTransactionPin(userId, pin);
+    if (!pinResult.valid) {
+      return res.status(401).json({ success: false, error: pinResult.error || "Invalid PIN." });
     }
 
     if (!amount || typeof amount !== "number" || amount <= 0) {
@@ -475,7 +654,6 @@ export const sendMoney = async (req: AuthRequest, res: Response) => {
     const va = await db.query.virtualAccounts.findFirst({
       where: eq(virtualAccounts.userId, userId),
     });
-
     if (!va) {
       return res.status(400).json({ success: false, error: "No virtual account found." });
     }
@@ -523,11 +701,9 @@ export const sendMoney = async (req: AuthRequest, res: Response) => {
       await db.update(virtualAccounts)
         .set({ balance: sql`${virtualAccounts.balance} + ${amount}`, updatedAt: new Date() })
         .where(eq(virtualAccounts.id, va.id));
-
       await db.update(transactions)
         .set({ status: "failed" })
         .where(eq(transactions.merchantTxRef, merchantTxRef));
-
       return res.status(500).json({ success: false, error: "Transfer failed to initiate. Please try again." });
     }
 

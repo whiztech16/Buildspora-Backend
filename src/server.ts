@@ -9,6 +9,8 @@ import paymentsRoutes from './routes/payments.routes'
 import projectsRoutes from './routes/projects.routes'
 import webhooksRoutes from './routes/webhooks.routes'
 import milestonesRoutes from "./routes/milestones.routes";
+import invitesRoutes from "./routes/invites.routes";
+import notificationsRoutes from "./routes/notifications.routes";
 import dns from 'dns';
 dns.setDefaultResultOrder('ipv4first');
 
@@ -52,6 +54,8 @@ app.use("/api/user", userRoutes);
 app.use("/api/payments", paymentsRoutes);
 app.use("/api/projects", projectsRoutes);
 app.use("/api/milestones", milestonesRoutes);
+app.use("/api/invites", invitesRoutes);
+app.use("/api/notifications", notificationsRoutes);
 // health check
 app.get("/health", (req, res) => {
   res.json({ success: true, message: "Server is running." });

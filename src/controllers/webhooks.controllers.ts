@@ -1,8 +1,7 @@
 import { Request, Response } from "express";
 import { eq, and, sql } from "drizzle-orm";
 import { db } from "../db";
-
-import { virtualAccounts, transactions, notifications,milestones } from "../db/schema";
+import { virtualAccounts, transactions, notifications, milestones } from "../db/schema";
 
 export const handleNombaWebhook = async (req: Request, res: Response) => {
   res.status(200).json({ received: true });
@@ -24,11 +23,15 @@ export const handleNombaWebhook = async (req: Request, res: Response) => {
         const amount = transaction.transactionAmount;
         const transactionId = transaction.transactionId;
 
+        console.log("👉 accountRef from webhook:", accountRef);
+
         const senderInfo = `Received from ${customer?.senderName || "Unknown"} (${customer?.bankName || "Unknown bank"} - ${customer?.accountNumber || "N/A"})`;
 
         const va = await db.query.virtualAccounts.findFirst({
           where: eq(virtualAccounts.nombaAccountId, accountRef),
         });
+
+        console.log("👉 VA found:", va ? va.id : "NOT FOUND");
 
         if (!va) {
           console.error("Nomba webhook: no VA found for aliasAccountReference", accountRef);

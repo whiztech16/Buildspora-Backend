@@ -22,6 +22,15 @@ export async function createAndSendOtp(
   const code = generateCode();
   const key = `otp:${purpose}:${userId}`;
 
+  // Log OTP to terminal for local development testing immediately
+  if (env.NODE_ENV === "development") {
+    console.log(`\n========================================`);
+    console.log(`🔐 OTP GENERATED FOR: ${email}`);
+    console.log(`Purpose: ${purpose}`);
+    console.log(`Code: ${code}`);
+    console.log(`========================================\n`);
+  }
+
   // Store in Redis — 10 minute expiry
   await redis.setex(key, 600, code);
 
@@ -95,7 +104,7 @@ export async function verifyOtp(
     };
   }
 
-  if (storedCode !== submittedCode) {
+  if (String(storedCode) !== String(submittedCode)) {
     const left = 3 - attempts;
     return { 
       valid: false, 
