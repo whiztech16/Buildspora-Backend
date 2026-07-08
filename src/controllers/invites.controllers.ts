@@ -29,15 +29,15 @@ async function sendInviteEmail(toEmail: string, projectName: string, senderName:
         <p>Hi there,</p>
         <p><strong>${senderName}</strong> has invited you to work on <strong>"${projectName}"</strong> on BuildSpora.</p>
         <p>BuildSpora is a construction project management platform that helps clients and contractors work together with milestone-based payments.</p>
-        <a href="${env.FRONTEND_URL}/signup?role=contractor"
+        <a href="${env.FRONTEND_URL}/create-account/contractor"
            style="display: inline-block; background: #16A34A; color: white; padding: 12px 24px;
                   border-radius: 8px; text-decoration: none; font-weight: bold; margin: 16px 0;">
-          Accept Invite & Sign Up
+          Accept Invite &amp; Sign Up
         </a>
         <p style="color: #6B7280; font-size: 13px;">
-          Already have an account? 
-          <a href="${env.FRONTEND_URL}/signin" style="color: #16A34A;">Sign in here</a> 
-          and check your invites.
+          Already have an account?
+          <a href="${env.FRONTEND_URL}/signin" style="color: #16A34A;">Sign in here</a>
+          and check your invites in the Jobs tab.
         </p>
         <p style="color: #6B7280; font-size: 12px; margin-top: 24px;">
           If you did not expect this invitation, you can safely ignore this email.

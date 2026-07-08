@@ -61,6 +61,7 @@ export const getMilestoneDetail = async (req: AuthRequest, res: Response) => {
 
     const checkIns = await db.query.siteCheckIns.findMany({
       where: eq(siteCheckIns.milestoneId, milestoneId),
+      orderBy: (c, { desc }) => [desc(c.checkInTime)],
     });
 
     const imagesWithMaps = images.map((img) => ({
@@ -70,8 +71,8 @@ export const getMilestoneDetail = async (req: AuthRequest, res: Response) => {
 
     const checkInsWithMaps = checkIns.map((c) => ({
       ...c,
-      checkInLocationName: c.checkInLocation,   // add this alias
-  checkOutLocationName: c.checkOutLocation, // add this alias
+      checkInLocationName: c.checkInLocation,
+      checkOutLocationName: c.checkOutLocation,
       checkInMapsUrl: c.checkInLat && c.checkInLng ? `https://www.google.com/maps?q=${c.checkInLat},${c.checkInLng}` : null,
       checkOutMapsUrl: c.checkOutLat && c.checkOutLng ? `https://www.google.com/maps?q=${c.checkOutLat},${c.checkOutLng}` : null,
     }));
@@ -208,6 +209,22 @@ export const checkOut = async (req: AuthRequest, res: Response) => {
       .where(eq(siteCheckIns.id, existing.id))
       .returning();
 
+    // Notify the client about checkout
+    const milestone = await db.query.milestones.findFirst({ where: eq(milestones.id, milestoneId) });
+    const project = milestone
+      ? await db.query.projects.findFirst({ where: eq(projects.id, milestone.projectId) })
+      : null;
+
+    if (project) {
+      await db.insert(notifications).values({
+        userId: project.clientId,
+        type: "contractor_checkout",
+        title: "Contractor Checked Out",
+        body: `${req.user!.fullName || "Contractor"} checked out from ${locationName || "site"}`,
+        linkTo: `/client/projects/${project.id}/milestones/${milestoneId}`,
+      });
+    }
+
     res.json({ success: true, checkOut: updated });
   } catch (error: any) {
     logError("checkOut", error);
@@ -260,6 +277,15 @@ export const uploadMilestonePhoto = async (req: AuthRequest, res: Response) => {
 
     const mapsUrl = lat && lng ? `https://www.google.com/maps?q=${lat},${lng}` : null;
 
+    // Notify the client about new site photo
+    await db.insert(notifications).values({
+      userId: project.clientId,
+      type: "photo_uploaded",
+      title: "New Site Photo Uploaded",
+      body: `${req.user!.fullName || "Contractor"} uploaded a site photo${locationName ? ` from ${locationName}` : ""}.`,
+      linkTo: `/client/projects/${project.id}/milestones/${milestoneId}`,
+    });
+
     res.json({ success: true, photo: { ...photo, mapsUrl } });
   } catch (error: any) {
     logError("uploadMilestonePhoto", error);
@@ -293,26 +319,14 @@ export const submitMilestone = async (req: AuthRequest, res: Response) => {
       return res.status(403).json({ success: false, error: "Access denied." });
     }
 
-    const checkInRecord = await db.query.siteCheckIns.findFirst({
-      where: and(
-        eq(siteCheckIns.milestoneId, milestoneId),
-        eq(siteCheckIns.contractorId, contractorId)
-      ),
-    });
-
     const images = await db.query.milestoneImages.findMany({
       where: eq(milestoneImages.milestoneId, milestoneId),
     });
 
-    if (!checkInRecord) {
-      return res.status(400).json({ success: false, error: "You must check in before submitting." });
-    }
     if (images.length === 0) {
       return res.status(400).json({ success: false, error: "You must upload at least one photo before submitting." });
     }
-    if (!checkInRecord.checkOutTime) {
-      return res.status(400).json({ success: false, error: "You must check out before submitting." });
-    }
+
     if (milestone.status === "submitted" || milestone.status === "approved") {
       return res.status(400).json({ success: false, error: `Milestone is already ${milestone.status}.` });
     }
