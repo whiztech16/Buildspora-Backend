@@ -221,7 +221,7 @@ export const checkOut = async (req: AuthRequest, res: Response) => {
         type: "contractor_checkout",
         title: "Contractor Checked Out",
         body: `${req.user!.fullName || "Contractor"} checked out from ${locationName || "site"}`,
-        linkTo: `/client/projects/${project.id}/milestones/${milestoneId}`,
+        linkTo: `/dashboard/client/project/${project.id}/milestones/${milestoneId}`,
       });
     }
 
@@ -283,7 +283,7 @@ export const uploadMilestonePhoto = async (req: AuthRequest, res: Response) => {
       type: "photo_uploaded",
       title: "New Site Photo Uploaded",
       body: `${req.user!.fullName || "Contractor"} uploaded a site photo${locationName ? ` from ${locationName}` : ""}.`,
-      linkTo: `/client/projects/${project.id}/milestones/${milestoneId}`,
+      linkTo: `/dashboard/client/project/${project.id}/milestones/${milestoneId}`,
     });
 
     res.json({ success: true, photo: { ...photo, mapsUrl } });
@@ -343,7 +343,7 @@ export const submitMilestone = async (req: AuthRequest, res: Response) => {
       type: "milestone_submitted",
       title: "Milestone Ready for Review",
       body: `${milestone.name} has been submitted. Review and approve to release payment.`,
-      linkTo: `/client/projects/${project.id}/milestones/${milestoneId}`,
+      linkTo: `/dashboard/client/project/${project.id}/milestones/${milestoneId}`,
     });
 
     res.json({ success: true, message: "Milestone submitted successfully. Awaiting client review." });
