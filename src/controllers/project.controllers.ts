@@ -85,6 +85,8 @@ export const getProjects = async (req: Request, res: Response): Promise<void> =>
 
 export const getProjectById = async (req: Request, res: Response): Promise<void> => {
   const id = req.params.id;
+  const dbUserId = (req as any).user.dbUserId;
+  const role = (req as any).user.role;
 
   if (!id || typeof id !== "string") {
     res.status(400).json({ success: false, error: "Invalid project id." });
@@ -95,6 +97,15 @@ export const getProjectById = async (req: Request, res: Response): Promise<void>
     const project = await db.query.projects.findFirst({ where: eq(projects.id, id) });
     if (!project) {
       res.status(404).json({ success: false, error: "Project not found." });
+      return;
+    }
+
+    // SEC FIX: Only the client who owns the project or the assigned contractor can view it
+    const hasAccess =
+      (role === "client" && project.clientId === dbUserId) ||
+      (role === "contractor" && project.contractorId === dbUserId);
+    if (!hasAccess) {
+      res.status(403).json({ success: false, error: "Access denied." });
       return;
     }
 

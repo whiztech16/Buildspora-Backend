@@ -1,9 +1,10 @@
 import { logError } from '../lib/logger';
 import { Request, Response } from "express";
-import { eq, and, isNull, desc, gte } from "drizzle-orm";
+import { eq, and, isNull, desc, gte, inArray } from "drizzle-orm";
 import { db } from "../db";
 import { milestones, milestoneImages, siteCheckIns, projects, notifications } from "../db/schema";
 import { uploadImage } from "../services/cloudinary.service";
+import { validateImageBuffer } from "../middleware/upload.middleware";
 
 interface AuthRequest extends Request {
   user?: {
@@ -263,6 +264,11 @@ export const uploadMilestonePhoto = async (req: AuthRequest, res: Response) => {
       return res.status(403).json({ success: false, error: "Access denied." });
     }
 
+    // Validate magic bytes before sending to Cloudinary
+    if (!validateImageBuffer(req.file.buffer)) {
+      return res.status(400).json({ success: false, error: "Invalid image file." });
+    }
+
     const storageUrl = await uploadImage(req.file.buffer, "buildspora/milestones");
 
     const [photo] = await db.insert(milestoneImages).values({
@@ -410,5 +416,148 @@ export const rejectMilestone = async (req: AuthRequest, res: Response) => {
   } catch (error: any) {
     logError("rejectMilestone", error);
     res.status(500).json({ success: false, error: "Failed to reject milestone. Please try again." });
+  }
+};
+
+// ─── Get Project Activity (bulk check-ins for all milestones) ──
+// Replaces N separate /milestones/:id calls with a single endpoint,
+// reducing Activity page load from N+2 serial HTTP requests to 2 parallel.
+export const getProjectActivity = async (req: AuthRequest, res: Response) => {
+  try {
+    const projectId = req.params.projectId as string;
+    const userId = req.user!.dbUserId;
+    const role = req.user!.role;
+
+    if (!projectId) {
+      return res.status(400).json({ success: false, error: "Project id is required." });
+    }
+
+    const project = await db.query.projects.findFirst({
+      where: eq(projects.id, projectId),
+    });
+    if (!project) {
+      return res.status(404).json({ success: false, error: "Project not found." });
+    }
+
+    // Only the client or assigned contractor can view activity
+    const hasAccess =
+      (role === "client" && project.clientId === userId) ||
+      (role === "contractor" && project.contractorId === userId);
+    if (!hasAccess) {
+      return res.status(403).json({ success: false, error: "Access denied." });
+    }
+
+    // Fetch all milestones for the project in one query
+    const projectMilestones = await db.query.milestones.findMany({
+      where: eq(milestones.projectId, projectId),
+      orderBy: (m, { asc }) => [asc(m.orderIndex)],
+    });
+
+    if (projectMilestones.length === 0) {
+      return res.json({ success: true, milestones: [], checkIns: [] });
+    }
+
+    // Fetch ALL check-ins for all milestones in ONE query (not N queries)
+    const milestoneIds = projectMilestones.map(m => m.id);
+    const allCheckIns = await db.query.siteCheckIns.findMany({
+      where: inArray(siteCheckIns.milestoneId, milestoneIds),
+      orderBy: (c, { desc }) => [desc(c.checkInTime)],
+    });
+
+    // Attach Google Maps URLs
+    const checkInsWithMaps = allCheckIns.map(c => ({
+      ...c,
+      checkInMapsUrl: c.checkInLat && c.checkInLng
+        ? `https://www.google.com/maps?q=${c.checkInLat},${c.checkInLng}`
+        : null,
+      checkOutMapsUrl: c.checkOutLat && c.checkOutLng
+        ? `https://www.google.com/maps?q=${c.checkOutLat},${c.checkOutLng}`
+        : null,
+    }));
+
+    res.json({
+      success: true,
+      milestones: projectMilestones,
+      checkIns: checkInsWithMaps,
+    });
+  } catch (error: any) {
+    logError("getProjectActivity", error);
+    res.status(500).json({ success: false, error: "Failed to load activity." });
+  }
+};
+
+// ─── Get Contractor Submissions (bulk) ─────────────────────────
+// Replaces: N*M serial HTTP calls (1 per project + 1 per milestone + 1 per image set)
+// With: 3 DB queries total — projects → milestones → images.
+export const getContractorSubmissions = async (req: AuthRequest, res: Response) => {
+  try {
+    const contractorId = req.user!.dbUserId;
+    const role = req.user!.role;
+
+    if (role !== "contractor") {
+      return res.status(403).json({ success: false, error: "Access denied." });
+    }
+
+    // 1. Get all projects this contractor is assigned to
+    const contractorProjects = await db.query.projects.findMany({
+      where: eq(projects.contractorId, contractorId),
+    });
+
+    if (contractorProjects.length === 0) {
+      return res.json({ success: true, submissions: [] });
+    }
+
+    const projectIds = contractorProjects.map(p => p.id);
+    const projectNameMap = new Map(contractorProjects.map(p => [p.id, p.name]));
+
+    // 2. Get all submitted/approved/rejected milestones across all projects in ONE query
+    const relevantMilestones = await db.query.milestones.findMany({
+      where: (m, { and, inArray, or }) => and(
+        inArray(m.projectId, projectIds),
+        or(
+          eq(milestones.status, "submitted"),
+          eq(milestones.status, "approved"),
+          eq(milestones.status, "rejected")
+        )
+      ),
+      orderBy: (m, { desc }) => [desc(m.submittedAt)],
+    });
+
+    if (relevantMilestones.length === 0) {
+      return res.json({ success: true, submissions: [] });
+    }
+
+    // 3. Get all images for all those milestones in ONE query
+    const milestoneIds = relevantMilestones.map(m => m.id);
+    const allImages = await db.query.milestoneImages.findMany({
+      where: inArray(milestoneImages.milestoneId, milestoneIds),
+      orderBy: (img, { asc }) => [asc(img.takenAt)],
+    });
+
+    // Group images by milestoneId
+    const imagesByMilestone = new Map<string, { storageUrl: string }[]>();
+    for (const img of allImages) {
+      if (!imagesByMilestone.has(img.milestoneId)) {
+        imagesByMilestone.set(img.milestoneId, []);
+      }
+      imagesByMilestone.get(img.milestoneId)!.push({ storageUrl: img.storageUrl });
+    }
+
+    // Assemble final response
+    const submissions = relevantMilestones.map(m => ({
+      id: m.id,
+      name: m.name,
+      projectName: projectNameMap.get(m.projectId) ?? null,
+      status: m.status,
+      rejectionReason: m.rejectionReason,
+      submittedAt: m.submittedAt,
+      approvedAt: m.approvedAt,
+      images: imagesByMilestone.get(m.id) ?? [],
+    }));
+
+    res.json({ success: true, submissions });
+  } catch (error: any) {
+    logError("getContractorSubmissions", error);
+    res.status(500).json({ success: false, error: "Failed to load submissions." });
   }
 };

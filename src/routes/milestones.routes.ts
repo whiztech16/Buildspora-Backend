@@ -6,12 +6,16 @@ import {
   uploadMilestonePhoto,
   submitMilestone,
   rejectMilestone,
+  getProjectActivity,
+  getContractorSubmissions,
 } from "../controllers/milestones.controllers";
 import { authMiddleware } from "../middleware/auth.middleware";
 import { upload } from "../middleware/upload.middleware";
 
 const router = Router();
 
+router.get("/activity/:projectId", authMiddleware, getProjectActivity);
+router.get("/submissions", authMiddleware, getContractorSubmissions);
 router.get("/:id", authMiddleware, getMilestoneDetail);
 router.post("/:id/checkin", authMiddleware, checkIn);
 router.post("/:id/checkout", authMiddleware, checkOut);

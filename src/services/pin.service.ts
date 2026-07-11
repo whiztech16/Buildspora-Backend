@@ -54,10 +54,9 @@ export async function verifyTransactionPin(
 ): Promise<{ valid: boolean; error?: string }> {
   const attemptsKey = `pin:attempts:${userId}`;
 
-  const attempts = await redis.incr(attemptsKey);
-  if (attempts === 1) await redis.expire(attemptsKey, LOCKOUT_SECONDS);
-
-  if (attempts > MAX_ATTEMPTS) {
+  // Check current lockout state BEFORE incrementing
+  const currentAttempts = await redis.get(attemptsKey);
+  if (currentAttempts !== null && Number(currentAttempts) >= MAX_ATTEMPTS) {
     return {
       valid: false,
       error: 'Too many incorrect attempts. Try again in 10 minutes.',
@@ -76,17 +75,28 @@ export async function verifyTransactionPin(
   const isMatch = await bcrypt.compare(submittedPin, user.transactionPinHash);
 
   if (!isMatch) {
-    const left = MAX_ATTEMPTS - attempts;
+    // Increment counter only on failure
+    const newCount = await redis.incr(attemptsKey);
+    if (newCount === 1) await redis.expire(attemptsKey, LOCKOUT_SECONDS);
+    const left = MAX_ATTEMPTS - newCount;
+    if (left <= 0) {
+      return {
+        valid: false,
+        error: 'Too many incorrect attempts. Try again in 10 minutes.',
+      };
+    }
     return {
       valid: false,
       error: `Incorrect PIN. ${left} attempt${left !== 1 ? 's' : ''} remaining.`,
     };
   }
 
+  // Success — clear the failed-attempts counter
   await redis.del(attemptsKey);
 
   return { valid: true };
 }
+
 
 // ── Reset PIN (forgot PIN — re-auth via password, no email) ──
 export async function resetTransactionPin(

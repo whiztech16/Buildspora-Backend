@@ -1,5 +1,4 @@
 import express from "express";
-import cors from "cors";
 import helmet from "helmet";
 import morgan from "morgan";
 import { env } from "./env";
@@ -45,8 +44,8 @@ app.use(morgan(env.NODE_ENV === "production" ? "combined" : "dev"));
 // and express.json() below would consume/parse it first otherwise.
 app.use("/api/webhooks", webhooksRoutes);
 
-app.use(express.json({ limit: "10mb" }));
-app.use(express.urlencoded({ extended: true }));
+app.use(express.json({ limit: "1mb" }));
+app.use(express.urlencoded({ extended: true, limit: "1mb" }));
 
 // routes
 app.use("/api/auth", authRoutes);

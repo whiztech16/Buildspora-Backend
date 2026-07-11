@@ -35,7 +35,7 @@ const envSchema = z.object({
 
   // Elastic Email (HTTP API — replaces SMTP/nodemailer)
   ELASTICEMAIL_API_KEY: z.string().min(1),
-  EMAIL_FROM: z.string().min(1), // e.g. "BuildSpora <fortuneokpara7@gmail.com>"
+  EMAIL_FROM: z.string().min(1), 
 });
 
 const parsed = envSchema.safeParse(process.env);

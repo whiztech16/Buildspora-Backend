@@ -6,6 +6,7 @@ import { logError } from "../lib/logger";
 import { eq } from "drizzle-orm";
 import { z } from "zod";
 import { uploadImage } from "../services/cloudinary.service";
+import { validateImageBuffer } from "../middleware/upload.middleware";
 
 //schemas
 const completeProfileSchema = z.object({
@@ -87,6 +88,12 @@ export const uploadAvatar = async (req: Request, res: Response): Promise<void> =
 
     if (!req.file) {
       res.status(400).json({ success: false, error: "No image file provided." });
+      return;
+    }
+
+    // Validate magic bytes before sending to Cloudinary
+    if (!validateImageBuffer(req.file.buffer)) {
+      res.status(400).json({ success: false, error: "Invalid image file." });
       return;
     }
 
