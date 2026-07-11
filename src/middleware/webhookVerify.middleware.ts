@@ -11,11 +11,19 @@ export const verifyNombaWebhook = (req: Request, res: Response, next: NextFuncti
   }
 
   // SEC-3 FIX: Reject webhooks with a stale timestamp (> 5 min old) to prevent replay attacks
-  const webhookTime = Number(timestamp);
+  // Nomba sends this as an ISO 8601 string (e.g. '2026-07-11T18:19:03Z'), not epoch ms.
+  // new Date() also handles a numeric epoch string safely, so this works either way.
+  const webhookTime = new Date(timestamp).getTime();
   const now = Date.now();
   const fiveMinutes = 5 * 60 * 1000;
+
   if (isNaN(webhookTime) || Math.abs(now - webhookTime) > fiveMinutes) {
-    console.error("Nomba webhook: timestamp too old or invalid", { timestamp, now });
+    console.error("Nomba webhook: timestamp too old or invalid", {
+      timestamp,
+      parsedTime: webhookTime,
+      now,
+      diffMs: Math.abs(now - webhookTime),
+    });
     return res.status(401).json({ success: false, error: "Webhook timestamp expired" });
   }
 
