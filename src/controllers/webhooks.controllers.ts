@@ -52,9 +52,11 @@ export const handleNombaWebhook = async (req: Request, res: Response) => {
           .set({ balance: sql`${virtualAccounts.balance} + ${amount}`, updatedAt: new Date() })
           .where(eq(virtualAccounts.id, va.id));
 
+        // Only match an intent that belongs to THIS virtual account to avoid cross-user reconciliation
         const intent = await db.query.transactions.findFirst({
           where: and(
             eq(transactions.userId, va.userId),
+            eq(transactions.toAccountId, va.id),
             eq(transactions.reconciliationStatus, "pending")
           ),
           orderBy: (t, { asc }) => [asc(t.createdAt)],
@@ -145,16 +147,29 @@ export const handleNombaWebhook = async (req: Request, res: Response) => {
           .set({ status: "failed", updatedAt: new Date() })
           .where(eq(transactions.merchantTxRef, merchantTxRef));
 
+        // Refund balance on failed payout
         if (txn.fromAccountId) {
           await db.update(virtualAccounts)
             .set({ balance: sql`${virtualAccounts.balance} + ${txn.amount}`, updatedAt: new Date() })
             .where(eq(virtualAccounts.id, txn.fromAccountId));
         }
 
+        // Revert milestone status if this was a milestone payment
         if (txn.milestoneId) {
           await db.update(milestones)
             .set({ status: "submitted", nombaPaymentRef: null })
             .where(eq(milestones.id, txn.milestoneId));
+        }
+
+        // LOGIC-1 FIX: Notify user their payout failed so they know funds were refunded
+        if (txn.userId) {
+          const amountFormatted = `₦${Number(txn.amount).toLocaleString()}`;
+          await db.insert(notifications).values({
+            userId: txn.userId,
+            type: "payment_failed",
+            title: "Transfer Failed",
+            body: `Your transfer of ${amountFormatted} to ${txn.recipientName ?? "your bank"} failed. The amount has been refunded to your BuildSpora balance.`,
+          });
         }
         break;
       }

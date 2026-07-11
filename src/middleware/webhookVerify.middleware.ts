@@ -10,6 +10,15 @@ export const verifyNombaWebhook = (req: Request, res: Response, next: NextFuncti
     return res.status(401).json({ success: false, error: "Missing signature or timestamp header" });
   }
 
+  // SEC-3 FIX: Reject webhooks with a stale timestamp (> 5 min old) to prevent replay attacks
+  const webhookTime = Number(timestamp);
+  const now = Date.now();
+  const fiveMinutes = 5 * 60 * 1000;
+  if (isNaN(webhookTime) || Math.abs(now - webhookTime) > fiveMinutes) {
+    console.error("Nomba webhook: timestamp too old or invalid", { timestamp, now });
+    return res.status(401).json({ success: false, error: "Webhook timestamp expired" });
+  }
+
   let payload: any;
   try {
     payload = JSON.parse((req.body as Buffer).toString());

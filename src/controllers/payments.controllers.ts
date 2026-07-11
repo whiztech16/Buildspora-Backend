@@ -12,6 +12,7 @@ import {
 } from "../services/pin.service";
 import { BANK_LIST, isValidBankCode, getBankByCode } from "../config/banks";
 import { generateReceiptPdf } from "../services/receipt.service";
+
 interface AuthRequest extends Request {
   user?: {
     dbUserId: string;
@@ -25,7 +26,7 @@ export const getBanks = async (_req: Request, res: Response) => {
   res.json({ success: true, banks: BANK_LIST });
 };
 
-// ─── Resolve Account Name ─────────────────────────────────────
+// ─── Resolve Account Name (external banks) ─────────────────────
 export const resolveAccountName = async (req: AuthRequest, res: Response) => {
   try {
     const { accountNumber, bankCode } = req.body;
@@ -48,6 +49,35 @@ export const resolveAccountName = async (req: AuthRequest, res: Response) => {
     });
   } catch (error: any) {
     res.status(422).json({ success: false, error: error.message || "Could not resolve account name." });
+  }
+};
+
+// ─── Resolve Internal BuildSpora Account (no Nomba call) ───────
+export const resolveInternalAccount = async (req: AuthRequest, res: Response) => {
+  try {
+    const { accountNumber } = req.body;
+
+    if (!accountNumber || typeof accountNumber !== "string") {
+      return res.status(400).json({ success: false, error: "Account number is required." });
+    }
+
+    const va = await db.query.virtualAccounts.findFirst({
+      where: eq(virtualAccounts.accountNumber, accountNumber),
+    });
+
+    if (!va) {
+      return res.status(404).json({ success: false, error: "No BuildSpora account found with that account number." });
+    }
+
+    res.json({
+      success: true,
+      accountName: va.accountName,
+      accountNumber: va.accountNumber,
+      bankName: "BuildSpora",
+    });
+  } catch (error: any) {
+    logError("resolveInternalAccount", error);
+    res.status(500).json({ success: false, error: "Could not resolve account." });
   }
 };
 
@@ -122,7 +152,6 @@ export const downloadReceipt = async (req: AuthRequest, res: Response) => {
       return res.status(404).json({ success: false, error: "Transaction not found." });
     }
 
-    // Only the owning user can download their own receipt
     if (txn.userId !== userId) {
       return res.status(403).json({ success: false, error: "Access denied." });
     }
@@ -156,6 +185,7 @@ export const generateAccount = async (req: AuthRequest, res: Response) => {
   try {
     const userId = req.user!.dbUserId;
 
+    // Always check our DB first — single source of truth
     const existing = await db.query.virtualAccounts.findFirst({
       where: eq(virtualAccounts.userId, userId),
     });
@@ -167,7 +197,7 @@ export const generateAccount = async (req: AuthRequest, res: Response) => {
           accountNumber: existing.accountNumber,
           accountName: existing.accountName,
           bankName: existing.bankName,
-          balance: existing.balance,
+          balance: Number(existing.balance),
         },
         alreadyExists: true,
       });
@@ -183,16 +213,39 @@ export const generateAccount = async (req: AuthRequest, res: Response) => {
 
     const accountName = `${user.fullName} - BuildSpora`;
 
+    // BUG-1 FIX: Use a deterministic accountRef (no Date.now()) so that if the
+    // Nomba call succeeds but our DB insert fails, a retry will find the same
+    // Nomba VA instead of creating a second one.
+    const deterministicRef = `bsp-${userId}`;
+
     const nombaVA = await createVirtualAccount({
-      accountRef: `${userId}-${Date.now()}`,
+      accountRef: deterministicRef,
       accountName,
     });
 
+    // After getting the Nomba VA, re-check DB in case a concurrent request
+    // already inserted a row while we were awaiting Nomba.
+    const raceCheck = await db.query.virtualAccounts.findFirst({
+      where: eq(virtualAccounts.userId, userId),
+    });
+    if (raceCheck) {
+      return res.json({
+        success: true,
+        virtualAccount: {
+          accountNumber: raceCheck.accountNumber,
+          accountName: raceCheck.accountName,
+          bankName: raceCheck.bankName,
+          balance: Number(raceCheck.balance),
+        },
+        alreadyExists: true,
+      });
+    }
+
     const [va] = await db.insert(virtualAccounts).values({
       userId,
-      nombaAccountId: nombaVA.accountRef,
+      nombaAccountId: nombaVA.accountRef ?? deterministicRef,
       accountNumber: nombaVA.bankAccountNumber,
-      accountName: nombaVA.bankAccountName,
+      accountName: nombaVA.bankAccountName ?? accountName,
       bankName: nombaVA.bankName,
       balance: "0.00",
       type: user.role === "client" ? "client_project" :
@@ -207,18 +260,28 @@ export const generateAccount = async (req: AuthRequest, res: Response) => {
         accountNumber: va.accountNumber,
         accountName: va.accountName,
         bankName: va.bankName,
-        balance: va.balance,
+        balance: Number(va.balance),
       },
       requiresPinSetup: !pinAlreadySet,
     });
   } catch (error: any) {
+    // Unique-constraint violation means a concurrent request already inserted
     if (error.code === "23505") {
       const existing = await db.query.virtualAccounts.findFirst({
         where: eq(virtualAccounts.userId, req.user!.dbUserId),
       });
-      return res.json({ success: true, virtualAccount: existing, alreadyExists: true });
+      return res.json({
+        success: true,
+        virtualAccount: existing ? {
+          accountNumber: existing.accountNumber,
+          accountName: existing.accountName,
+          bankName: existing.bankName,
+          balance: Number(existing.balance),
+        } : null,
+        alreadyExists: true,
+      });
     }
-    console.error("generateAccount error:", error.response?.data || error.message);
+    logError("generateAccount", error);
     res.status(500).json({ success: false, error: "Failed to generate account. Please try again." });
   }
 };
@@ -304,9 +367,25 @@ export const createFundingIntent = async (req: AuthRequest, res: Response) => {
 export const getReconciliationReport = async (req: AuthRequest, res: Response) => {
   try {
     const projectId = req.params.projectId as string;
+    const userId = req.user!.dbUserId;
+    const role = req.user!.role;
 
     if (!projectId) {
       return res.status(400).json({ success: false, error: "Invalid project id." });
+    }
+
+    // SEC FIX: Verify the requester is the client or contractor on this project
+    const project = await db.query.projects.findFirst({
+      where: eq(projects.id, projectId),
+    });
+    if (!project) {
+      return res.status(404).json({ success: false, error: "Project not found." });
+    }
+    const hasAccess =
+      (role === "client" && project.clientId === userId) ||
+      (role === "contractor" && project.contractorId === userId);
+    if (!hasAccess) {
+      return res.status(403).json({ success: false, error: "Access denied." });
     }
 
     const projectMilestones = await db.query.milestones.findMany({
@@ -465,27 +544,39 @@ export const approveMilestone = async (req: AuthRequest, res: Response) => {
       return res.status(400).json({ success: false, error: "Contractor has not generated a virtual account yet." });
     }
 
-    const balance = Number(clientVA.balance);
     const amount = Number(milestone.allocatedAmount);
+    const merchantTxRef = `MILESTONE-${milestoneId}-${Date.now()}`;
 
-    if (balance < amount) {
-      const shortfall = amount - balance;
+    // BUG-2 FIX: Atomic balance debit — only succeeds if balance is sufficient.
+    // Uses SQL-level check to prevent race conditions / double-spend.
+    const [debitResult] = await db
+      .update(virtualAccounts)
+      .set({ balance: sql`${virtualAccounts.balance} - ${amount}`, updatedAt: new Date() })
+      .where(
+        and(
+          eq(virtualAccounts.id, clientVA.id),
+          sql`${virtualAccounts.balance} >= ${amount}`
+        )
+      )
+      .returning({ newBalance: virtualAccounts.balance });
+
+    if (!debitResult) {
+      // Row wasn't updated — balance was insufficient at the DB level
+      const fresh = await db.query.virtualAccounts.findFirst({
+        where: eq(virtualAccounts.id, clientVA.id),
+      });
+      const currentBalance = Number(fresh?.balance ?? 0);
+      const shortfall = amount - currentBalance;
       return res.status(402).json({
         success: false,
         error: "insufficient_balance",
-        balance,
+        balance: currentBalance,
         required: amount,
         shortfall,
         accountNumber: clientVA.accountNumber,
         bankName: clientVA.bankName,
       });
     }
-
-    const merchantTxRef = `MILESTONE-${milestoneId}-${Date.now()}`;
-
-    await db.update(virtualAccounts)
-      .set({ balance: sql`${virtualAccounts.balance} - ${amount}`, updatedAt: new Date() })
-      .where(eq(virtualAccounts.id, clientVA.id));
 
     await db.update(virtualAccounts)
       .set({ balance: sql`${virtualAccounts.balance} + ${amount}`, updatedAt: new Date() })
@@ -505,6 +596,19 @@ export const approveMilestone = async (req: AuthRequest, res: Response) => {
       milestoneId,
       merchantTxRef,
       narration: `BuildSpora: ${milestone.name} payment`,
+    });
+
+    // Create an inbound transaction record for the contractor so it shows in their history
+    await db.insert(transactions).values({
+      fromAccountId: clientVA.id,
+      toAccountId: contractorVA.id,
+      userId: project.contractorId,
+      type: "milestone_payout",
+      amount: String(amount),
+      status: "success",
+      milestoneId,
+      merchantTxRef: `${merchantTxRef}-IN`,
+      narration: `Received: ${milestone.name} payment`,
     });
 
     await db.insert(notifications).values({
@@ -535,7 +639,8 @@ export const approveMilestone = async (req: AuthRequest, res: Response) => {
 export const withdrawFunds = async (req: AuthRequest, res: Response) => {
   try {
     const userId = req.user!.dbUserId;
-    const { amount, pin } = req.body;
+    // Accept bank details from the request body (user's form) as well as amount & pin
+    const { amount, pin, accountNumber, accountName, bankCode, bankName } = req.body;
 
     if (!pin || typeof pin !== "string") {
       return res.status(400).json({ success: false, error: "Transaction PIN is required." });
@@ -555,6 +660,12 @@ export const withdrawFunds = async (req: AuthRequest, res: Response) => {
       return res.status(400).json({ success: false, error: "Valid amount is required." });
     }
 
+    // Minimum withdrawal amount
+    const MIN_WITHDRAWAL = 10;
+    if (amount < MIN_WITHDRAWAL) {
+      return res.status(400).json({ success: false, error: `Minimum withdrawal amount is ₦${MIN_WITHDRAWAL}.` });
+    }
+
     const va = await db.query.virtualAccounts.findFirst({
       where: eq(virtualAccounts.userId, userId),
     });
@@ -562,23 +673,47 @@ export const withdrawFunds = async (req: AuthRequest, res: Response) => {
       return res.status(400).json({ success: false, error: "No virtual account found." });
     }
 
-    const balance = Number(va.balance);
-    if (balance < amount) {
-      return res.status(402).json({ success: false, error: "Insufficient balance." });
+    // BUG-5 FIX: Use bank details from request body if supplied, fall back to saved account.
+    // This lets the user withdraw to any bank account they enter in the form.
+    let withdrawAccountNum = accountNumber;
+    let withdrawAccountName = accountName;
+    let withdrawBankCode = bankCode;
+    let withdrawBankName = bankName;
+
+    if (!withdrawAccountNum || !withdrawBankCode) {
+      const bankAccount = await db.query.savedBankAccounts.findFirst({
+        where: eq(savedBankAccounts.userId, userId),
+      });
+      if (!bankAccount) {
+        return res.status(400).json({ success: false, error: "Please provide bank account details or set up a payout account." });
+      }
+      withdrawAccountNum = bankAccount.accountNum;
+      withdrawAccountName = bankAccount.accountName;
+      withdrawBankCode = bankAccount.bankCode;
+      withdrawBankName = bankAccount.bankName;
     }
 
-    const bankAccount = await db.query.savedBankAccounts.findFirst({
-      where: eq(savedBankAccounts.userId, userId),
-    });
-    if (!bankAccount) {
-      return res.status(400).json({ success: false, error: "No payout bank account set up." });
+    if (!withdrawAccountName) {
+      return res.status(400).json({ success: false, error: "Account name is required." });
     }
 
     const merchantTxRef = `WITHDRAW-${userId}-${Date.now()}`;
 
-    await db.update(virtualAccounts)
+    // BUG-2 FIX: Atomic balance debit
+    const [debitResult] = await db
+      .update(virtualAccounts)
       .set({ balance: sql`${virtualAccounts.balance} - ${amount}`, updatedAt: new Date() })
-      .where(eq(virtualAccounts.id, va.id));
+      .where(
+        and(
+          eq(virtualAccounts.id, va.id),
+          sql`${virtualAccounts.balance} >= ${amount}`
+        )
+      )
+      .returning({ newBalance: virtualAccounts.balance });
+
+    if (!debitResult) {
+      return res.status(402).json({ success: false, error: "Insufficient balance." });
+    }
 
     await db.insert(transactions).values({
       fromAccountId: va.id,
@@ -588,38 +723,48 @@ export const withdrawFunds = async (req: AuthRequest, res: Response) => {
       status: "pending",
       merchantTxRef,
       narration: "Withdrawal to bank account",
-      recipientBank: bankAccount.bankName,
-      recipientAcct: bankAccount.accountNum,
-      recipientName: bankAccount.accountName,
+      recipientBank: withdrawBankName || null,
+      recipientAcct: withdrawAccountNum,
+      recipientName: withdrawAccountName,
     });
 
     try {
       await transferToBank({
         amount,
-        accountNumber: bankAccount.accountNum,
-        accountName: bankAccount.accountName,
-        bankCode: bankAccount.bankCode,
+        accountNumber: withdrawAccountNum,
+        accountName: withdrawAccountName,
+        bankCode: withdrawBankCode,
         narration: "BuildSpora withdrawal",
         merchantTxRef,
       });
+
+      // Nomba accepted the transfer — mark it success immediately.
+      // The payout_success webhook (if/when it arrives) will be a harmless no-op.
+      // This prevents the "pending forever" issue on environments where the
+      // webhook cannot reach the server (localhost, firewall, etc.).
+      await db.update(transactions)
+        .set({ status: "success", updatedAt: new Date() })
+        .where(eq(transactions.merchantTxRef, merchantTxRef));
     } catch (transferError: any) {
+      // Nomba rejected the transfer — refund the balance and mark failed
       await db.update(virtualAccounts)
         .set({ balance: sql`${virtualAccounts.balance} + ${amount}`, updatedAt: new Date() })
         .where(eq(virtualAccounts.id, va.id));
       await db.update(transactions)
         .set({ status: "failed" })
         .where(eq(transactions.merchantTxRef, merchantTxRef));
+      logError("withdrawFunds transferToBank", transferError);
       return res.status(500).json({ success: false, error: "Withdrawal failed to initiate. Please try again." });
     }
 
-    res.json({ success: true, message: "Withdrawal initiated. Funds are on their way to your bank account." });
+    res.json({ success: true, message: "Withdrawal successful. Funds are on their way to your bank account.", merchantTxRef });
   } catch (error: any) {
     logError("withdrawFunds", error);
     res.status(500).json({ success: false, error: "Failed to process withdrawal. Please try again." });
   }
 };
 
-// ─── Send Money ───────────────────────────────────────────────
+// ─── Send Money (external bank) ────────────────────────────────
 export const sendMoney = async (req: AuthRequest, res: Response) => {
   try {
     const userId = req.user!.dbUserId;
@@ -659,22 +804,23 @@ export const sendMoney = async (req: AuthRequest, res: Response) => {
       return res.status(400).json({ success: false, error: "No virtual account found." });
     }
 
-    const balance = Number(va.balance);
-    if (balance < amount) {
-      return res.status(402).json({
-        success: false,
-        error: "insufficient_balance",
-        balance,
-        required: amount,
-        shortfall: amount - balance,
-      });
-    }
-
     const merchantTxRef = `SEND-${userId}-${Date.now()}`;
 
-    await db.update(virtualAccounts)
+    // Atomic balance debit — prevents race conditions / double-spend
+    const [debitResult] = await db
+      .update(virtualAccounts)
       .set({ balance: sql`${virtualAccounts.balance} - ${amount}`, updatedAt: new Date() })
-      .where(eq(virtualAccounts.id, va.id));
+      .where(
+        and(
+          eq(virtualAccounts.id, va.id),
+          sql`${virtualAccounts.balance} >= ${amount}`
+        )
+      )
+      .returning({ newBalance: virtualAccounts.balance });
+
+    if (!debitResult) {
+      return res.status(402).json({ success: false, error: "Insufficient balance." });
+    }
 
     await db.insert(transactions).values({
       fromAccountId: va.id,
@@ -698,6 +844,12 @@ export const sendMoney = async (req: AuthRequest, res: Response) => {
         narration: narration || "BuildSpora transfer",
         merchantTxRef,
       });
+
+      // Mark success immediately — Nomba accepted the transfer.
+      // Webhook confirmation (payout_success) is a harmless no-op if/when it arrives.
+      await db.update(transactions)
+        .set({ status: "success", updatedAt: new Date() })
+        .where(eq(transactions.merchantTxRef, merchantTxRef));
     } catch (transferError: any) {
       await db.update(virtualAccounts)
         .set({ balance: sql`${virtualAccounts.balance} + ${amount}`, updatedAt: new Date() })
@@ -705,12 +857,131 @@ export const sendMoney = async (req: AuthRequest, res: Response) => {
       await db.update(transactions)
         .set({ status: "failed" })
         .where(eq(transactions.merchantTxRef, merchantTxRef));
+      logError("sendMoney transferToBank", transferError);
       return res.status(500).json({ success: false, error: "Transfer failed to initiate. Please try again." });
     }
 
     res.json({ success: true, message: "Transfer initiated successfully.", merchantTxRef });
   } catch (error: any) {
     logError("sendMoney", error);
+    res.status(500).json({ success: false, error: "Failed to send money. Please try again." });
+  }
+};
+
+// ─── Send to BuildSpora User (internal VA-to-VA transfer) ──────
+export const sendToBuildSporaUser = async (req: AuthRequest, res: Response) => {
+  try {
+    const senderId = req.user!.dbUserId;
+    const { recipientAccountNumber, amount, narration, pin } = req.body;
+
+    if (!pin || typeof pin !== "string") {
+      return res.status(400).json({ success: false, error: "Transaction PIN is required." });
+    }
+
+    const hasPinSet = await hasTransactionPin(senderId);
+    if (!hasPinSet) {
+      return res.status(403).json({ success: false, error: "PIN_REQUIRED", message: "You must set a transaction PIN before making payments." });
+    }
+
+    const pinResult = await verifyTransactionPin(senderId, pin);
+    if (!pinResult.valid) {
+      return res.status(401).json({ success: false, error: pinResult.error || "Invalid PIN." });
+    }
+
+    if (!amount || typeof amount !== "number" || amount <= 0) {
+      return res.status(400).json({ success: false, error: "Valid amount is required." });
+    }
+    if (!recipientAccountNumber || typeof recipientAccountNumber !== "string") {
+      return res.status(400).json({ success: false, error: "Recipient account number is required." });
+    }
+
+    const senderVA = await db.query.virtualAccounts.findFirst({
+      where: eq(virtualAccounts.userId, senderId),
+    });
+    if (!senderVA) {
+      return res.status(400).json({ success: false, error: "No virtual account found." });
+    }
+
+    const recipientVA = await db.query.virtualAccounts.findFirst({
+      where: eq(virtualAccounts.accountNumber, recipientAccountNumber),
+    });
+    if (!recipientVA) {
+      return res.status(404).json({ success: false, error: "No BuildSpora account found with that account number." });
+    }
+    if (recipientVA.userId === senderId) {
+      return res.status(400).json({ success: false, error: "You cannot send money to yourself." });
+    }
+
+    const merchantTxRef = `P2P-${senderId}-${Date.now()}`;
+
+    // BUG-2 FIX: Atomic balance debit — prevents race conditions
+    const [debitResult] = await db
+      .update(virtualAccounts)
+      .set({ balance: sql`${virtualAccounts.balance} - ${amount}`, updatedAt: new Date() })
+      .where(
+        and(
+          eq(virtualAccounts.id, senderVA.id),
+          sql`${virtualAccounts.balance} >= ${amount}`
+        )
+      )
+      .returning({ newBalance: virtualAccounts.balance });
+
+    if (!debitResult) {
+      const fresh = await db.query.virtualAccounts.findFirst({
+        where: eq(virtualAccounts.id, senderVA.id),
+      });
+      const currentBalance = Number(fresh?.balance ?? 0);
+      return res.status(402).json({
+        success: false,
+        error: "insufficient_balance",
+        balance: currentBalance,
+        required: amount,
+        shortfall: amount - currentBalance,
+      });
+    }
+
+    await db.update(virtualAccounts)
+      .set({ balance: sql`${virtualAccounts.balance} + ${amount}`, updatedAt: new Date() })
+      .where(eq(virtualAccounts.id, recipientVA.id));
+
+    // Outbound transaction for the sender
+    await db.insert(transactions).values({
+      fromAccountId: senderVA.id,
+      toAccountId: recipientVA.id,
+      userId: senderId,
+      type: "bank_transfer",
+      amount: String(amount),
+      status: "success",
+      merchantTxRef,
+      narration: narration || "BuildSpora transfer",
+      recipientAcct: recipientVA.accountNumber,
+      recipientName: recipientVA.accountName,
+      recipientBank: "BuildSpora",
+    });
+
+    // BUG-4 FIX: Create an inbound transaction for the recipient so it appears
+    // in their transaction history as received funds.
+    await db.insert(transactions).values({
+      fromAccountId: senderVA.id,
+      toAccountId: recipientVA.id,
+      userId: recipientVA.userId,
+      type: "inbound",
+      amount: String(amount),
+      status: "success",
+      merchantTxRef: `${merchantTxRef}-IN`,
+      narration: narration || "BuildSpora transfer received",
+    });
+
+    await db.insert(notifications).values({
+      userId: recipientVA.userId,
+      type: "payment_received",
+      title: "Payment Received",
+      body: `You received ₦${amount.toLocaleString()} on BuildSpora`,
+    });
+
+    res.json({ success: true, message: "Transfer completed instantly.", merchantTxRef });
+  } catch (error: any) {
+    logError("sendToBuildSporaUser", error);
     res.status(500).json({ success: false, error: "Failed to send money. Please try again." });
   }
 };
